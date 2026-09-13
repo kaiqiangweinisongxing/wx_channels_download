@@ -546,6 +546,7 @@ export function ShellViewModel(props) {
   const menu_configs = [
     { title: "下载", name: "root.shell.download", icon: "download" },
     { title: "Get", name: "root.shell.scraper", icon: "search" },
+    { title: "浏览器", name: "root.shell.browser", icon: "globe" },
     { title: "内容", name: "root.shell.content", icon: "library" },
     {
       title: "浏览",

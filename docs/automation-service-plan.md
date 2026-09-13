@@ -128,15 +128,16 @@ Thin layer calling `AutomationService` methods. Pattern matches existing handler
 
 ```go
 // Routes (added to routes.go):
-c.engine.GET("/api/v1/automation/schedules", c.handle_list_schedules)
-c.engine.POST("/api/v1/automation/schedules", c.handle_create_schedule)
-c.engine.GET("/api/v1/automation/schedules/:id", c.handle_get_schedule)
-c.engine.PUT("/api/v1/automation/schedules/:id", c.handle_update_schedule)
-c.engine.DELETE("/api/v1/automation/schedules/:id", c.handle_delete_schedule)
-c.engine.POST("/api/v1/automation/schedules/:id/toggle", c.handle_toggle_schedule)
-c.engine.POST("/api/v1/automation/schedules/:id/trigger", c.handle_trigger_schedule)
-c.engine.GET("/api/v1/automation/runs", c.handle_list_runs)
-c.engine.GET("/api/v1/automation/runs/:id", c.handle_get_run)
+c.engine.POST("/api/v1/automation/list_schedules", c.handle_list_schedules)
+c.engine.POST("/api/v1/automation/create_schedule", c.handle_create_schedule)
+c.engine.POST("/api/v1/automation/get_schedule", c.handle_get_schedule)
+c.engine.POST("/api/v1/automation/update_schedule", c.handle_update_schedule)
+c.engine.POST("/api/v1/automation/delete_schedule", c.handle_delete_schedule)
+c.engine.POST("/api/v1/automation/toggle_schedule", c.handle_toggle_schedule)
+c.engine.POST("/api/v1/automation/trigger_schedule", c.handle_trigger_schedule)
+c.engine.POST("/api/v1/automation/list_runs", c.handle_list_runs)
+c.engine.POST("/api/v1/automation/get_run", c.handle_get_run)
+c.engine.POST("/api/v1/automation/cancel_run", c.handle_cancel_run)
 ```
 
 ### 6. `internal/api/client.go` + `server.go` — Wire AutomationService
@@ -241,9 +242,9 @@ github.com/robfig/cron/v3
 ## Verification
 
 1. `go build ./...` — compile check
-2. Create a schedule via API: `POST /api/v1/automation/schedules` with a `@every 1m` cron expr and a registered flow_id
-3. Check `GET /api/v1/automation/schedules` shows the schedule with computed `next_run_at`
-4. Wait for tick or manually trigger: `POST /api/v1/automation/schedules/:id/trigger`
-5. Check run records: `GET /api/v1/automation/runs`
-6. Toggle disable: `POST /api/v1/automation/schedules/:id/toggle` — verify skipped on next tick
+2. Create a schedule via API: `POST /api/v1/automation/create_schedule` with a `@every 1m` cron expr and a registered flow_id
+3. Check `POST /api/v1/automation/list_schedules` shows the schedule with computed `next_run_at`
+4. Wait for tick or manually trigger: `POST /api/v1/automation/trigger_schedule` with the schedule `id`
+5. Check run records: `POST /api/v1/automation/list_runs`
+6. Toggle disable: `POST /api/v1/automation/toggle_schedule` with the schedule `id` — verify skipped on next tick
 7. Restart the app — verify schedules and run history survive

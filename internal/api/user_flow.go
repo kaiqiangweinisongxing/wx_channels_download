@@ -1,6 +1,8 @@
 package api
 
 import (
+	"errors"
+	"io"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -19,11 +21,20 @@ type user_flow_create_body struct {
 }
 
 type user_flow_update_body struct {
+	ID            string                       `json:"id"`
 	Name          *string                      `json:"name"`
 	Description   *string                      `json:"description"`
 	ContextSchema []engine.FieldSchema         `json:"context_schema"`
 	StartNodeID   string                       `json:"start_node_id"`
 	Nodes         []services.UserFlowNodeInput `json:"nodes"`
+}
+
+type user_flow_id_body struct {
+	ID string `json:"id"`
+}
+
+type user_flow_graph_body struct {
+	FlowID string `json:"flow_id"`
 }
 
 func (c *APIClient) handle_list_user_flows(ctx *gin.Context) {
@@ -68,7 +79,12 @@ func (c *APIClient) handle_get_user_flow(ctx *gin.Context) {
 	if !ok {
 		return
 	}
-	flow, err := service.GetUserFlow(ctx.Param("id"))
+	var body user_flow_id_body
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		result.Err(ctx, api_code_invalid_params, "请求参数无效")
+		return
+	}
+	flow, err := service.GetUserFlow(strings.TrimSpace(body.ID))
 	if err != nil {
 		result.Err(ctx, api_code_invalid_params, err.Error())
 		return
@@ -86,7 +102,7 @@ func (c *APIClient) handle_update_user_flow(ctx *gin.Context) {
 		result.Err(ctx, api_code_invalid_params, "请求参数无效")
 		return
 	}
-	flow, err := service.UpdateUserFlow(ctx.Param("id"), services.UpdateUserFlowInput{
+	flow, err := service.UpdateUserFlow(strings.TrimSpace(body.ID), services.UpdateUserFlowInput{
 		Name:          body.Name,
 		Description:   body.Description,
 		ContextSchema: body.ContextSchema,
@@ -105,11 +121,17 @@ func (c *APIClient) handle_delete_user_flow(ctx *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := service.DeleteUserFlow(ctx.Param("id")); err != nil {
+	var body user_flow_id_body
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		result.Err(ctx, api_code_invalid_params, "请求参数无效")
+		return
+	}
+	id := strings.TrimSpace(body.ID)
+	if err := service.DeleteUserFlow(id); err != nil {
 		result.Err(ctx, api_code_invalid_params, err.Error())
 		return
 	}
-	result.Ok(ctx, gin.H{"id": ctx.Param("id")})
+	result.Ok(ctx, gin.H{"id": id})
 }
 
 // handle_get_user_flow_graph renders a user pipeline in the visualization
@@ -119,7 +141,12 @@ func (c *APIClient) handle_get_user_flow_graph(ctx *gin.Context) {
 	if !ok {
 		return
 	}
-	payload, err := service.UserFlowVisualization(ctx.Query("flow_id"))
+	var body user_flow_graph_body
+	if err := ctx.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
+		result.Err(ctx, api_code_invalid_params, "请求参数无效")
+		return
+	}
+	payload, err := service.UserFlowVisualization(strings.TrimSpace(body.FlowID))
 	if err != nil {
 		result.Err(ctx, api_code_invalid_params, err.Error())
 		return
@@ -140,7 +167,12 @@ func (c *APIClient) handle_trigger_user_flow(ctx *gin.Context) {
 	if !ok {
 		return
 	}
-	flow_id := strings.TrimSpace(ctx.Param("id"))
+	var body user_flow_id_body
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		result.Err(ctx, api_code_invalid_params, "请求参数无效")
+		return
+	}
+	flow_id := strings.TrimSpace(body.ID)
 	flow, err := service.GetUserFlow(flow_id)
 	if err != nil {
 		result.Err(ctx, api_code_invalid_params, err.Error())

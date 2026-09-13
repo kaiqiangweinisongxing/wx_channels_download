@@ -23,3 +23,11 @@ func NewWorkflowEngine() *engine.FlowEngine {
 	e.RegisterNode("ManualNode", nodes.NewManualNode)
 	return e
 }
+
+// RegisterServiceNode adds process-local service tool execution to an engine.
+func RegisterServiceNode(flow_engine *engine.FlowEngine, executor nodes.ServiceToolExecutor) {
+	if flow_engine == nil {
+		return
+	}
+	flow_engine.RegisterNode("ServiceNode", nodes.NewServiceNodeFactory(executor))
+}

@@ -15,6 +15,15 @@ import (
 
 var err_unknown_tool = errors.New("未知工具")
 
+// ToolDefinition is the editor-safe description of one MCP tool.
+type ToolDefinition struct {
+	Name        string         `json:"name"`
+	Title       string         `json:"title"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"input_schema"`
+	Annotations map[string]any `json:"annotations,omitempty"`
+}
+
 type tool_execution_error struct {
 	message string
 	data    any
@@ -333,6 +342,63 @@ func ToolNames() []string {
 		}
 	}
 	return names
+}
+
+// ToolCatalog returns every tool registered by tools.go and its extension
+// definition files. It is used by the automation editor to configure service
+// nodes without maintaining a second tool list.
+func ToolCatalog() []ToolDefinition {
+	definitions := tool_definitions()
+	catalog := make([]ToolDefinition, 0, len(definitions))
+	for _, definition := range definitions {
+		tool, ok := definition.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := tool["name"].(string)
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		title, _ := tool["title"].(string)
+		description, _ := tool["description"].(string)
+		input_schema, _ := tool["inputSchema"].(map[string]any)
+		annotations, _ := tool["annotations"].(map[string]any)
+		catalog = append(catalog, ToolDefinition{
+			Name:        name,
+			Title:       title,
+			Description: description,
+			InputSchema: input_schema,
+			Annotations: annotations,
+		})
+	}
+	return catalog
+}
+
+// ExecuteTool invokes an MCP tool directly and returns its structured result.
+// This shares the exact same validation and dispatch path as tools/call.
+func (s *Server) ExecuteTool(ctx context.Context, name string, arguments map[string]any) (any, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("工具名称不能为空")
+	}
+	if arguments == nil {
+		arguments = map[string]any{}
+	}
+	raw_arguments, err := json.Marshal(arguments)
+	if err != nil {
+		return nil, fmt.Errorf("编码工具参数失败: %w", err)
+	}
+	result, err := s.call_tool(ctx, call_tool_params{
+		Name:      name,
+		Arguments: raw_arguments,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if structured, ok := result["structuredContent"]; ok {
+		return structured, nil
+	}
+	return result, nil
 }
 
 func (s *Server) tool_definitions() []any {

@@ -27,6 +27,7 @@ type APIClient struct {
 	static_assets             *webassets.Registry
 	event_publisher           events.Publisher
 	runtime_status_service    *services.RuntimeStatusService
+	minib_navigate            minib_navigate_function
 
 	claw_client *clawreq.Client
 
@@ -86,6 +87,7 @@ func NewAPIClient(
 		download_task_broadcaster:   download_task_broadcaster,
 		event_publisher:             event_publisher,
 		runtime_status_service:      runtime_status_service,
+		minib_navigate:              new_minib_navigator(cfg.WorkDir),
 		account_service:             account_service,
 		content_service:             content_service,
 		browse_history_service:      browse_history_service,

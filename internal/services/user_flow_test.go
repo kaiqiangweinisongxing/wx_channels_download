@@ -14,9 +14,9 @@ func new_user_flow_service(t *testing.T) *AutomationService {
 func TestCreateUserFlowProducesStartOnlyDefinition(t *testing.T) {
 	service := new_user_flow_service(t)
 	flow, err := service.CreateUserFlow(CreateUserFlowInput{
-		Name: "测试流程",
-		TriggerType: "Event",
-		EventKey: "test.event",
+		Name:          "测试流程",
+		TriggerType:   "Event",
+		EventKey:      "test.event",
 		ContextSchema: []engine.FieldSchema{{Key: "url", Type: "string", Required: true}},
 	})
 	if err != nil {
@@ -59,7 +59,7 @@ func TestUpdateUserFlowAppendsNodeAndEdge(t *testing.T) {
 	}
 	updated, err := service.UpdateUserFlow(flow.ID, UpdateUserFlowInput{
 		Nodes: []UserFlowNodeInput{
-			{ID: "start", Type: "StartNode", Name: "开始", NextIDs: []string{"calc"}},
+			{ID: "start", Type: "StartNode", Name: "开始", Position: &engine.NodePosition{X: 48, Y: 72}, NextIDs: []string{"calc"}},
 			{ID: "calc", Type: "ExprNode", Name: "计算", Config: map[string]interface{}{
 				"expression": "1 + 1",
 			}, NextIDs: []string{"end"}},
@@ -78,6 +78,9 @@ func TestUpdateUserFlowAppendsNodeAndEdge(t *testing.T) {
 	}
 	if len(definition.Nodes["start"].NextNodes) != 1 || definition.Nodes["start"].NextNodes[0].TargetID != "calc" {
 		t.Fatalf("start node edge missing: %+v", definition.Nodes["start"])
+	}
+	if definition.Nodes["start"].Position == nil || definition.Nodes["start"].Position.X != 48 || definition.Nodes["start"].Position.Y != 72 {
+		t.Fatalf("start node position missing: %+v", definition.Nodes["start"].Position)
 	}
 	if service.flow_engine.FlowDefinitions[flow.ID].Nodes["calc"].ID != "calc" {
 		t.Fatal("updated definition was not re-registered into the engine")

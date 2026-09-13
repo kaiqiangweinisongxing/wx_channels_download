@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"wx_channel/internal/database/model"
+	"wx_channel/internal/mcpserver"
 	"wx_channel/pkg/flowengine"
 	"wx_channel/pkg/flowengine/engine"
 )
@@ -25,6 +26,7 @@ type UserFlowNodeCatalogItem struct {
 	Name        string              `json:"name"`
 	Description string              `json:"description"`
 	ConfigKeys  []UserFlowConfigKey `json:"config_keys"`
+	Tools       []mcpserver.ToolDefinition `json:"tools,omitempty"`
 }
 
 type UserFlowConfigKey struct {
@@ -70,6 +72,19 @@ func user_flow_node_catalog() []UserFlowNodeCatalogItem {
 			Description: "流程暂停，等待人工处理后继续",
 		},
 		{
+			Type:        "ServiceNode",
+			Name:        "服务调用",
+			Description: "调用应用内 MCP Service tool，并将结构化结果写回流程上下文",
+			ConfigKeys: []UserFlowConfigKey{
+				{Key: "tool_name", Type: "string", Required: true, Description: "要调用的 MCP tool 名称"},
+				{Key: "arguments", Type: "object", Required: false, Description: "传给 tool 的静态参数"},
+				{Key: "input_map", Type: "object", Required: false, Description: "tool 参数名到流程上下文键的映射"},
+				{Key: "output_key", Type: "string", Required: false, Description: "结构化结果写入上下文的键，默认 service_result"},
+				{Key: "timeout_seconds", Type: "number", Required: false, Description: "节点调用超时时间；不填时由具体 tool 控制"},
+			},
+			Tools: mcpserver.ToolCatalog(),
+		},
+		{
 			Type:        "EndNode",
 			Name:        "结束",
 			Description: "流程结束节点",
@@ -103,6 +118,7 @@ type UserFlowNodeInput struct {
 	Type        string                 `json:"type"`
 	Name        string                 `json:"name"`
 	Config      map[string]interface{} `json:"config"`
+	Position    *engine.NodePosition   `json:"position,omitempty"`
 	InputSchema []engine.FieldSchema   `json:"input_schema"`
 	NextIDs     []string               `json:"next_ids"`
 }
@@ -283,6 +299,9 @@ func (s *AutomationService) UpdateUserFlow(id string, input UpdateUserFlowInput)
 			if config == nil {
 				config = map[string]interface{}{}
 			}
+			if err := validate_user_flow_node_config(node.Type, config); err != nil {
+				return nil, fmt.Errorf("节点 %s 配置无效: %w", node_id, err)
+			}
 			config["id"] = node_id
 			next_nodes := make([]engine.TargetNode, 0, len(node.NextIDs))
 			for _, next := range node.NextIDs {
@@ -297,6 +316,7 @@ func (s *AutomationService) UpdateUserFlow(id string, input UpdateUserFlowInput)
 				Type:        node.Type,
 				Name:        node.Name,
 				Config:      config,
+				Position:    node.Position,
 				NextNodes:   next_nodes,
 				NextNodeIDs: node.NextIDs,
 				InputSchema: node.InputSchema,
@@ -395,11 +415,65 @@ func (s *AutomationService) UserFlowVisualization(flow_id string) (*flowengine.F
 // behaviour is fully described by JSON config.
 func user_flow_allows_node_type(node_type string) bool {
 	switch node_type {
-	case "StartNode", "EndNode", "ExprNode", "GatewayNode", "APICallNode", "ManualNode":
+	case "StartNode", "EndNode", "ExprNode", "GatewayNode", "APICallNode", "ManualNode", "ServiceNode":
 		return true
 	default:
 		return false
 	}
+}
+
+func validate_user_flow_node_config(node_type string, config map[string]interface{}) error {
+	if node_type != "ServiceNode" {
+		return nil
+	}
+	tool_name, _ := config["tool_name"].(string)
+	tool_name = strings.TrimSpace(tool_name)
+	if tool_name == "" {
+		return fmt.Errorf("tool_name 不能为空")
+	}
+	known_tool := false
+	for _, name := range mcpserver.ToolNames() {
+		if name == tool_name {
+			known_tool = true
+			break
+		}
+	}
+	if !known_tool {
+		return fmt.Errorf("tool_name 不支持: %s", tool_name)
+	}
+	if arguments, exists := config["arguments"]; exists && arguments != nil {
+		if _, ok := arguments.(map[string]interface{}); !ok {
+			return fmt.Errorf("arguments 必须是 JSON 对象")
+		}
+	}
+	if input_map_value, exists := config["input_map"]; exists && input_map_value != nil {
+		input_map, ok := input_map_value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("input_map 必须是 JSON 对象")
+		}
+		for argument_name, context_key := range input_map {
+			if strings.TrimSpace(argument_name) == "" {
+				return fmt.Errorf("input_map 参数名不能为空")
+			}
+			context_key_text, ok := context_key.(string)
+			if !ok || strings.TrimSpace(context_key_text) == "" {
+				return fmt.Errorf("input_map.%s 必须是上下文键字符串", argument_name)
+			}
+		}
+	}
+	if output_key, exists := config["output_key"]; exists && output_key != nil {
+		output_key_text, ok := output_key.(string)
+		if !ok || strings.TrimSpace(output_key_text) == "" {
+			return fmt.Errorf("output_key 必须是非空字符串")
+		}
+	}
+	if timeout_value, exists := config["timeout_seconds"]; exists && timeout_value != nil {
+		timeout_seconds, ok := timeout_value.(float64)
+		if !ok || timeout_seconds <= 0 {
+			return fmt.Errorf("timeout_seconds 必须是正数")
+		}
+	}
+	return nil
 }
 
 // SortedUserFlowNodeCatalog keeps a stable order for the editor picker.

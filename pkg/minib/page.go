@@ -72,6 +72,12 @@ type NavigateOptions struct {
 	// DisableJavaScript skips script discovery, download, and execution while
 	// retaining a queryable DOM for SSR extraction.
 	DisableJavaScript bool
+	// Device simulates a device class (DevicePC or DeviceMobile) for the
+	// viewport metrics (innerWidth/innerHeight/screen/devicePixelRatio), CSS
+	// media queries, matchMedia, and touch-related navigator fields. Mobile
+	// also substitutes a mobile User-Agent unless the caller sets one. The
+	// zero value keeps the legacy fixed 1440x900 desktop metrics.
+	Device Device
 	// JavaScriptTimeout limits one top-level script or host callback. Zero uses
 	// the remaining navigation context deadline.
 	JavaScriptTimeout time.Duration
@@ -125,6 +131,101 @@ const (
 	WaitUntilLoad             NavigationWaitUntil = "load"
 	WaitUntilDOMContentLoaded NavigationWaitUntil = "domcontentloaded"
 )
+
+// Device selects a simulated device class for viewport metrics, media-query
+// matching, matchMedia, and touch-related navigator fields.
+type Device string
+
+const (
+	// DevicePC simulates a desktop browser with a 1080x880 viewport.
+	DevicePC Device = "pc"
+	// DeviceMobile simulates an iPhone-class browser with a 390x844 viewport
+	// and a mobile User-Agent.
+	DeviceMobile Device = "mobile"
+)
+
+// device_profile collects every simulated surface derived from a Device so
+// window/screen/navigator, matchMedia, and CSS media queries stay consistent.
+type device_profile struct {
+	viewport_width      int
+	viewport_height     int
+	screen_width        int
+	screen_height       int
+	screen_avail_width  int
+	screen_avail_height int
+	pixel_ratio         int
+	platform            string
+	max_touch_points    int
+	coarse_pointer      bool
+	user_agent          string
+}
+
+// legacy_device_profile reproduces the viewport metrics minib hard-coded
+// before Device existed. The zero-value NavigateOptions keeps using it so
+// existing callers observe no behavior change.
+var legacy_device_profile = device_profile{
+	viewport_width:      1440,
+	viewport_height:     900,
+	screen_width:        1440,
+	screen_height:       900,
+	screen_avail_width:  1440,
+	screen_avail_height: 875,
+	pixel_ratio:         2,
+	platform:            "MacIntel",
+	max_touch_points:    0,
+}
+
+var device_profiles = map[Device]device_profile{
+	DevicePC: {
+		viewport_width:      1080,
+		viewport_height:     880,
+		screen_width:        1080,
+		screen_height:       880,
+		screen_avail_width:  1080,
+		screen_avail_height: 855,
+		pixel_ratio:         2,
+		platform:            "MacIntel",
+		max_touch_points:    0,
+	},
+	DeviceMobile: {
+		viewport_width:      390,
+		viewport_height:     844,
+		screen_width:        390,
+		screen_height:       844,
+		screen_avail_width:  390,
+		screen_avail_height: 844,
+		pixel_ratio:         3,
+		platform:            "iPhone",
+		max_touch_points:    5,
+		coarse_pointer:      true,
+		user_agent:          "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+	},
+}
+
+// resolve_device_profile returns the profile for a Device value. The zero
+// value resolves to the legacy 1440x900 desktop metrics.
+func resolve_device_profile(device Device) device_profile {
+	if profile, ok := device_profiles[device]; ok {
+		return profile
+	}
+	return legacy_device_profile
+}
+
+// apply_device_user_agent substitutes the simulated mobile User-Agent unless
+// the caller provided one. iOS Safari does not send Chromium client hint
+// headers, so they are dropped together with the UA.
+func apply_device_user_agent(document_headers http.Header, caller_headers http.Header, device Device) {
+	if device != DeviceMobile {
+		return
+	}
+	if caller_headers != nil && caller_headers.Get("User-Agent") != "" {
+		return
+	}
+	document_headers.Set("User-Agent", device_profiles[DeviceMobile].user_agent)
+	document_headers.Del("Sec-Ch-Ua")
+	document_headers.Del("Sec-Ch-Ua-Mobile")
+	document_headers.Del("Sec-Ch-Ua-Platform")
+}
 
 // ResourceKind identifies a resource discovered in the page HTML.
 type ResourceKind string
@@ -271,50 +372,50 @@ type xhr_network_result struct {
 }
 
 type page_runtime struct {
-	browser               *MiniBrowser
-	ctx                   context.Context
-	lifecycle_ctx         context.Context
-	network_ctx           context.Context
-	page                  *Page
-	page_url              *url.URL
-	base_url              *url.URL
-	vm                    *goja.Runtime
-	nodes                 map[*html.Node]*goja.Object
-	object_nodes          map[*goja.Object]*html.Node
-	fragments             map[*html.Node]bool
-	iframe_documents      map[*html.Node]*html.Node
-	iframe_windows        map[*html.Node]*goja.Object
-	shadow_roots          map[*html.Node]*html.Node
-	shadow_hosts          map[*html.Node]*html.Node
-	shadow_modes          map[*html.Node]string
-	adopted_style_sheets  map[*html.Node]goja.Value
-	template_contents     map[*html.Node]*html.Node
-	styles                map[*html.Node]*goja.Object
-	style_blocks          map[*html.Node]*css_declaration_block
-	style_sheets          []*css_style_sheet
-	style_sheet_by_node   map[*html.Node]*css_style_sheet
-	computed_styles       map[*html.Node]map[string]css_property
-	styles_dirty          bool
-	dirty_style_roots     map[*html.Node]bool
-	listeners             map[*html.Node]map[string][]*event_listener
-	window_listeners      map[string][]*event_listener
-	dispatching_events    map[*goja.Object]bool
-	dynamic_scripts       []*html.Node
-	dynamic_styles        []*html.Node
-	dynamic_resources     []*html.Node
-	dynamic_seen          map[*html.Node]bool
-	created_scripts       map[*html.Node]bool
-	custom_elements       map[string]*custom_element_definition
-	custom_waiters        map[string][]func(interface{}) error
-	custom_constructed    map[*html.Node]bool
-	custom_connected      map[*html.Node]bool
-	pending_custom_nodes  []*html.Node
-	custom_reactions      []custom_element_reaction
-	running_reactions     bool
-	dynamic_script_depth  int
-	timers                []*timer_job
-	timer_by_id           map[int64]*timer_job
-	timer_time_ms         int64
+	browser              *MiniBrowser
+	ctx                  context.Context
+	lifecycle_ctx        context.Context
+	network_ctx          context.Context
+	page                 *Page
+	page_url             *url.URL
+	base_url             *url.URL
+	vm                   *goja.Runtime
+	nodes                map[*html.Node]*goja.Object
+	object_nodes         map[*goja.Object]*html.Node
+	fragments            map[*html.Node]bool
+	iframe_documents     map[*html.Node]*html.Node
+	iframe_windows       map[*html.Node]*goja.Object
+	shadow_roots         map[*html.Node]*html.Node
+	shadow_hosts         map[*html.Node]*html.Node
+	shadow_modes         map[*html.Node]string
+	adopted_style_sheets map[*html.Node]goja.Value
+	template_contents    map[*html.Node]*html.Node
+	styles               map[*html.Node]*goja.Object
+	style_blocks         map[*html.Node]*css_declaration_block
+	style_sheets         []*css_style_sheet
+	style_sheet_by_node  map[*html.Node]*css_style_sheet
+	computed_styles      map[*html.Node]map[string]css_property
+	styles_dirty         bool
+	dirty_style_roots    map[*html.Node]bool
+	listeners            map[*html.Node]map[string][]*event_listener
+	window_listeners     map[string][]*event_listener
+	dispatching_events   map[*goja.Object]bool
+	dynamic_scripts      []*html.Node
+	dynamic_styles       []*html.Node
+	dynamic_resources    []*html.Node
+	dynamic_seen         map[*html.Node]bool
+	created_scripts      map[*html.Node]bool
+	custom_elements      map[string]*custom_element_definition
+	custom_waiters       map[string][]func(interface{}) error
+	custom_constructed   map[*html.Node]bool
+	custom_connected     map[*html.Node]bool
+	pending_custom_nodes []*html.Node
+	custom_reactions     []custom_element_reaction
+	running_reactions    bool
+	dynamic_script_depth int
+	timers               []*timer_job
+	timer_by_id          map[int64]*timer_job
+	timer_time_ms        int64
 	// Animation frames are budgeted by frame count instead of virtual time, so
 	// a tween that starts after the timer clock budget is spent still runs.
 	animation_frames_left int64
@@ -324,6 +425,7 @@ type page_runtime struct {
 	current_script_url    string
 	ready_state           string
 	user_agent            string
+	device                device_profile
 	request_headers       http.Header
 	disable_css           bool
 	javascript_timeout    time.Duration
@@ -410,9 +512,14 @@ func validate_navigate_options(options NavigateOptions) error {
 	}
 	switch options.WaitUntil {
 	case "", WaitUntilLoad, WaitUntilDOMContentLoaded:
-		return nil
 	default:
 		return fmt.Errorf("minib: unsupported WaitUntil value %q", options.WaitUntil)
+	}
+	switch options.Device {
+	case "", DevicePC, DeviceMobile:
+		return nil
+	default:
+		return fmt.Errorf("minib: unsupported Device value %q", options.Device)
 	}
 }
 
@@ -435,6 +542,7 @@ func (b *MiniBrowser) navigate(ctx context.Context, raw_url string, headers http
 	for name, values := range headers {
 		document_headers[name] = append([]string(nil), values...)
 	}
+	apply_device_user_agent(document_headers, headers, navigate_options.Device)
 	if navigate_options.DisableCache {
 		disable_cache_headers(document_headers)
 	}
@@ -532,6 +640,7 @@ func (b *MiniBrowser) navigate_post(ctx context.Context, raw_url string, body st
 	for name, values := range headers {
 		document_headers[name] = append([]string(nil), values...)
 	}
+	apply_device_user_agent(document_headers, headers, navigate_options.Device)
 	document_headers.Set("Content-Type", "application/x-www-form-urlencoded")
 	if navigate_options.DisableCache {
 		disable_cache_headers(document_headers)
@@ -1202,6 +1311,7 @@ func (b *MiniBrowser) execute_page(ctx context.Context, page *Page, page_url *ur
 		blob_urls:            make(map[string]string),
 		ready_state:          "loading",
 		user_agent:           request_headers.Get("User-Agent"),
+		device:               resolve_device_profile(page.navigate_options.Device),
 		request_headers:      request_headers.Clone(),
 		disable_css:          page.disable_css,
 		javascript_timeout:   page.javascript_timeout,
@@ -2448,7 +2558,7 @@ if (typeof Promise.withResolvers !== 'function') {
 	_ = navigator.SetPrototype(window.Get("Navigator").ToObject(runtime.vm).Get("prototype").ToObject(runtime.vm))
 	_ = navigator.Set("appName", "Netscape")
 	_ = navigator.Set("userAgent", runtime.user_agent)
-	_ = navigator.Set("platform", "MacIntel")
+	_ = navigator.Set("platform", runtime.device.platform)
 	_ = navigator.Set("language", "zh-CN")
 	_ = navigator.Set("languages", runtime.vm.NewArray("zh-CN", "zh", "en"))
 	_ = navigator.Set("cookieEnabled", true)
@@ -2457,14 +2567,32 @@ if (typeof Promise.withResolvers !== 'function') {
 	_ = navigator.Set("plugins", runtime.vm.NewArray())
 	_ = navigator.Set("mimeTypes", runtime.vm.NewArray())
 	_ = navigator.Set("hardwareConcurrency", 8)
-	_ = navigator.Set("maxTouchPoints", 0)
+	_ = navigator.Set("maxTouchPoints", runtime.device.max_touch_points)
 	_ = navigator.Set("javaEnabled", func() bool { return false })
 	_ = navigator.Set("sendBeacon", func(string, ...any) bool { return true })
 	_ = window.Set("navigator", navigator)
-	_ = window.Set("screen", map[string]int{"width": 1440, "height": 900, "availWidth": 1440, "availHeight": 875, "colorDepth": 24, "pixelDepth": 24})
-	_ = window.Set("innerWidth", 1440)
-	_ = window.Set("innerHeight", 900)
-	_ = window.Set("devicePixelRatio", 2)
+	_ = window.Set("screen", map[string]int{
+		"width":       runtime.device.screen_width,
+		"height":      runtime.device.screen_height,
+		"availWidth":  runtime.device.screen_avail_width,
+		"availHeight": runtime.device.screen_avail_height,
+		"colorDepth":  24,
+		"pixelDepth":  24,
+	})
+	_ = window.Set("innerWidth", runtime.device.viewport_width)
+	_ = window.Set("innerHeight", runtime.device.viewport_height)
+	_ = window.Set("devicePixelRatio", runtime.device.pixel_ratio)
+	_ = window.Set("visualViewport", map[string]any{
+		"width":               runtime.device.viewport_width,
+		"height":              runtime.device.viewport_height,
+		"offsetTop":           0,
+		"offsetLeft":          0,
+		"pageTop":             0,
+		"pageLeft":            0,
+		"scale":               1,
+		"addEventListener":    func(...any) {},
+		"removeEventListener": func(...any) {},
+	})
 	_ = window.Set("pageXOffset", 0)
 	_ = window.Set("pageYOffset", 0)
 	_ = window.Set("scrollTo", func(...any) {})
@@ -2655,7 +2783,7 @@ if (typeof Promise.withResolvers !== 'function') {
 		return cloned
 	})
 	_ = window.Set("matchMedia", func(query string) map[string]any {
-		return map[string]any{"matches": strings.Contains(query, "hover") || strings.Contains(query, "pointer"), "media": query, "addListener": func(...any) {}, "removeListener": func(...any) {}, "addEventListener": func(...any) {}, "removeEventListener": func(...any) {}}
+		return map[string]any{"matches": runtime.media_query_matches(query), "media": query, "addListener": func(...any) {}, "removeListener": func(...any) {}, "addEventListener": func(...any) {}, "removeEventListener": func(...any) {}}
 	})
 	runtime.install_window_events(window)
 	runtime.install_timers(window)
@@ -4260,7 +4388,15 @@ func (runtime *page_runtime) install_element(object *goja.Object, node *html.Nod
 			define_getter(runtime.vm, object, property_name, func() any { return url_property(runtime.element_url(node), property_name) })
 		}
 	}
-	for _, name := range []string{"clientWidth", "clientHeight", "offsetWidth", "offsetHeight", "scrollWidth", "scrollHeight", "scrollTop", "scrollLeft"} {
+	for _, name := range []string{"clientWidth", "offsetWidth", "scrollWidth"} {
+		property_name := name
+		define_getter(runtime.vm, object, property_name, func() any { return runtime.element_layout_width(node) })
+	}
+	for _, name := range []string{"clientHeight", "offsetHeight", "scrollHeight"} {
+		property_name := name
+		define_getter(runtime.vm, object, property_name, func() any { return runtime.element_layout_height(node) })
+	}
+	for _, name := range []string{"scrollTop", "scrollLeft"} {
 		define_getter(runtime.vm, object, name, func() any { return 0 })
 	}
 	_ = object.Set("getAttribute", func(name string) any {
@@ -4312,12 +4448,7 @@ func (runtime *page_runtime) install_element(object *goja.Object, node *html.Nod
 		return nil
 	})
 	bounding_rect := func() map[string]float64 {
-		if contains_node(runtime.page.Document, node) {
-			// Geometry is synthetic because minib deliberately has no layout or
-			// rendering backend yet.
-			return map[string]float64{"x": 0, "y": 0, "top": 0, "right": 100, "bottom": 20, "left": 0, "width": 100, "height": 20}
-		}
-		return map[string]float64{"x": 0, "y": 0, "top": 0, "right": 0, "bottom": 0, "left": 0, "width": 0, "height": 0}
+		return runtime.shared_bounding_rect(node)
 	}
 	_ = object.Set("getBoundingClientRect", bounding_rect)
 	_ = object.Set("getClientRects", func() []map[string]float64 {

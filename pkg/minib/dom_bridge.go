@@ -237,7 +237,11 @@ func (runtime *page_runtime) shared_node_property(node *html.Node, name string) 
 			return url_property(runtime.element_url(node), name)
 		}
 		return ""
-	case "clientWidth", "clientHeight", "offsetWidth", "offsetHeight", "scrollWidth", "scrollHeight", "scrollTop", "scrollLeft":
+	case "clientWidth", "offsetWidth", "scrollWidth":
+		return runtime.element_layout_width(node)
+	case "clientHeight", "offsetHeight", "scrollHeight":
+		return runtime.element_layout_height(node)
+	case "scrollTop", "scrollLeft":
 		return 0
 	}
 	return nil
@@ -623,9 +627,40 @@ func (runtime *page_runtime) insert_shared_adjacent(node *html.Node, position st
 	return runtime.node_object(child)
 }
 
+// element_layout_width approximates the CSS pixel width of an element. minib
+// has no layout engine, so every element attached to the document is treated
+// as an in-flow block box whose containing chain fills the viewport. That is
+// the width viewport-driven layout code (el-table column distribution, chart
+// containers, responsive menus) needs to see instead of the previous 0.
+func (runtime *page_runtime) element_layout_width(node *html.Node) int {
+	if node == nil || !contains_node(runtime.page.Document, node) {
+		return 0
+	}
+	return runtime.device.viewport_width
+}
+
+// element_layout_height approximates the CSS pixel height of an element. Only
+// the html root reports a real dimension (the viewport itself, matching
+// documentElement.clientHeight in browsers); content height stays 0 because
+// minib cannot know it and a fake non-zero height would skew visibility math.
+func (runtime *page_runtime) element_layout_height(node *html.Node) int {
+	if node == nil || !contains_node(runtime.page.Document, node) {
+		return 0
+	}
+	if node.Type == html.ElementNode && strings.EqualFold(node.Data, "html") {
+		return runtime.device.viewport_height
+	}
+	return 0
+}
+
 func (runtime *page_runtime) shared_bounding_rect(node *html.Node) map[string]float64 {
 	if contains_node(runtime.page.Document, node) {
-		return map[string]float64{"x": 0, "y": 0, "top": 0, "right": 100, "bottom": 20, "left": 0, "width": 100, "height": 20}
+		// Geometry is synthetic because minib deliberately has no layout or
+		// rendering backend: width follows the viewport flow approximation
+		// while height keeps a small stub so visibility checks still treat
+		// every attached box as on-screen.
+		width := float64(runtime.device.viewport_width)
+		return map[string]float64{"x": 0, "y": 0, "top": 0, "right": width, "bottom": 20, "left": 0, "width": width, "height": 20}
 	}
 	return map[string]float64{"x": 0, "y": 0, "top": 0, "right": 0, "bottom": 0, "left": 0, "width": 0, "height": 0}
 }

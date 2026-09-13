@@ -226,9 +226,13 @@ var ChannelsAutomation = (() => {
         "/api/channels/postprocess/flows",
       );
       state.pipelines = (pipeline_payload && pipeline_payload.flows) || [];
-      var schedule_payload = await request_api("/api/v1/automation/schedules", {
-        query: { page: 1, page_size: 100 },
-      });
+      var schedule_payload = await request_api(
+        "/api/v1/automation/list_schedules",
+        {
+          method: "POST",
+          body: { page: 1, page_size: 100 },
+        },
+      );
       state.schedules = (schedule_payload && schedule_payload.list) || [];
       if (!state.selected_flow_id && state.pipelines.length > 0) {
         state.selected_flow_id = state.pipelines[0].id;
@@ -271,8 +275,9 @@ var ChannelsAutomation = (() => {
   }
 
   async function load_runs(schedule_id, skip_render) {
-    var payload = await request_api("/api/v1/automation/runs", {
-      query: { schedule_id: schedule_id, page: 1, page_size: 20 },
+    var payload = await request_api("/api/v1/automation/list_runs", {
+      method: "POST",
+      body: { schedule_id: schedule_id, page: 1, page_size: 20 },
     });
     state.runs = (payload && payload.list) || [];
     if (!skip_render) render();
@@ -284,9 +289,10 @@ var ChannelsAutomation = (() => {
     state.loading = true;
     render();
     try {
-      var schedule = await request_api(
-        "/api/v1/automation/schedules/" + encodeURIComponent(id),
-      );
+      var schedule = await request_api("/api/v1/automation/get_schedule", {
+        method: "POST",
+        body: { id: id },
+      });
       var index = state.schedules.findIndex(function (item) {
         return item.id === id;
       });
@@ -313,25 +319,23 @@ var ChannelsAutomation = (() => {
       });
       var metadata = schedule_metadata(schedule);
       if (action === "toggle" && metadata.type === "Cron") {
-        await request_api(
-          "/api/v1/automation/schedules/" + encodeURIComponent(id) + "/toggle",
-          { method: "POST" },
-        );
+        await request_api("/api/v1/automation/toggle_schedule", {
+          method: "POST",
+          body: { id: id },
+        });
         state.notice = "自动化状态已更新";
       } else if (action === "trigger") {
-        await request_api(
-          "/api/v1/automation/schedules/" + encodeURIComponent(id) + "/trigger",
-          {
-            method: "POST",
-            body: {
-              trigger_type:
-                metadata.type === "Event"
-                  ? "Event"
-                  : "Manual",
-              event_key: metadata.type === "Event" ? metadata.event_key : "",
-            },
+        await request_api("/api/v1/automation/trigger_schedule", {
+          method: "POST",
+          body: {
+            id: id,
+            trigger_type:
+              metadata.type === "Event"
+                ? "Event"
+                : "Manual",
+            event_key: metadata.type === "Event" ? metadata.event_key : "",
           },
-        );
+        });
         state.notice =
           metadata.type === "Event" ? "事件已触发" : "自动化流程已手动触发";
       }
@@ -425,7 +429,7 @@ var ChannelsAutomation = (() => {
       if (!body.name) throw new Error("请输入流程名称");
       if (!body.flow_id) throw new Error("请选择 Pipeline");
       if (submit) submit.disabled = true;
-      var schedule = await request_api("/api/v1/automation/schedules", {
+      var schedule = await request_api("/api/v1/automation/create_schedule", {
         method: "POST",
         body: body,
       });
@@ -826,9 +830,9 @@ var ChannelsAutomation = (() => {
             text("span", "事件调用", "ca-property__label"),
             text(
               "code",
-              'POST /api/v1/automation/schedules/' +
+              'POST /api/v1/automation/trigger_schedule {"id":"' +
                 schedule.id +
-                '/trigger {"trigger_type":"Event"}',
+                '","trigger_type":"Event"}',
             ),
           ],
         }),

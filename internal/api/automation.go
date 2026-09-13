@@ -3,7 +3,6 @@ package api
 import (
 	"errors"
 	"io"
-	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -23,12 +22,26 @@ type automation_schedule_create_body struct {
 	TimeoutSec  int                    `json:"timeout_sec"`
 }
 
+type automation_schedule_list_body struct {
+	Page     int    `json:"page"`
+	PageSize int    `json:"page_size"`
+	FlowID   string `json:"flow_id"`
+	Keyword  string `json:"keyword"`
+	Enabled  *bool  `json:"enabled"`
+}
+
+type automation_id_body struct {
+	ID string `json:"id"`
+}
+
 type automation_schedule_trigger_body struct {
+	ID          string `json:"id"`
 	TriggerType string `json:"trigger_type"`
 	EventKey    string `json:"event_key"`
 }
 
 type automation_schedule_update_body struct {
+	ID          string                 `json:"id"`
 	Name        *string                `json:"name"`
 	Description *string                `json:"description"`
 	CronExpr    *string                `json:"cron_expr"`
@@ -36,6 +49,14 @@ type automation_schedule_update_body struct {
 	InitialData map[string]interface{} `json:"initial_data"`
 	Enabled     *bool                  `json:"enabled"`
 	TimeoutSec  *int                   `json:"timeout_sec"`
+}
+
+type automation_run_list_body struct {
+	Page       int    `json:"page"`
+	PageSize   int    `json:"page_size"`
+	ScheduleID string `json:"schedule_id"`
+	FlowID     string `json:"flow_id"`
+	Status     string `json:"status"`
 }
 
 // automation_list_payload mirrors the paging envelope used by the other v1 list
@@ -47,20 +68,6 @@ func automation_list_payload(list interface{}, total int64, page int, page_size 
 		"page":      page,
 		"page_size": page_size,
 	}
-}
-
-// automation_query_page reads page/page_size query parameters. Invalid values
-// fall back to the service defaults so a bad client request still returns data.
-func automation_query_page(ctx *gin.Context) (int, int) {
-	page := 0
-	page_size := 0
-	if value, err := strconv.Atoi(strings.TrimSpace(ctx.Query("page"))); err == nil {
-		page = value
-	}
-	if value, err := strconv.Atoi(strings.TrimSpace(ctx.Query("page_size"))); err == nil {
-		page_size = value
-	}
-	return page, page_size
 }
 
 func (c *APIClient) automation_service_or_error(ctx *gin.Context) (*services.AutomationService, bool) {
@@ -76,20 +83,17 @@ func (c *APIClient) handle_list_automation_schedules(ctx *gin.Context) {
 	if !ok {
 		return
 	}
-	page, page_size := automation_query_page(ctx)
-	input := services.ListSchedulesInput{
-		Page:     page,
-		PageSize: page_size,
-		FlowID:   strings.TrimSpace(ctx.Query("flow_id")),
-		Keyword:  strings.TrimSpace(ctx.Query("keyword")),
+	var body automation_schedule_list_body
+	if err := ctx.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
+		result.Err(ctx, api_code_invalid_params, "请求参数无效")
+		return
 	}
-	if enabled_value := strings.TrimSpace(ctx.Query("enabled")); enabled_value != "" {
-		if enabled, err := strconv.ParseBool(enabled_value); err == nil {
-			input.Enabled = &enabled
-		} else {
-			result.Err(ctx, api_code_invalid_params, "参数 enabled 必须是布尔值")
-			return
-		}
+	input := services.ListSchedulesInput{
+		Page:     body.Page,
+		PageSize: body.PageSize,
+		FlowID:   strings.TrimSpace(body.FlowID),
+		Keyword:  strings.TrimSpace(body.Keyword),
+		Enabled:  body.Enabled,
 	}
 	schedules, total, err := service.ListSchedules(input)
 	if err != nil {
@@ -130,7 +134,12 @@ func (c *APIClient) handle_get_automation_schedule(ctx *gin.Context) {
 	if !ok {
 		return
 	}
-	schedule, err := service.GetSchedule(ctx.Param("id"))
+	var body automation_id_body
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		result.Err(ctx, api_code_invalid_params, "请求参数无效")
+		return
+	}
+	schedule, err := service.GetSchedule(strings.TrimSpace(body.ID))
 	if err != nil {
 		result.Err(ctx, api_code_invalid_params, err.Error())
 		return
@@ -148,7 +157,7 @@ func (c *APIClient) handle_update_automation_schedule(ctx *gin.Context) {
 		result.Err(ctx, api_code_invalid_params, "请求参数无效")
 		return
 	}
-	schedule, err := service.UpdateSchedule(ctx.Param("id"), services.UpdateScheduleInput{
+	schedule, err := service.UpdateSchedule(strings.TrimSpace(body.ID), services.UpdateScheduleInput{
 		Name:        body.Name,
 		Description: body.Description,
 		CronExpr:    body.CronExpr,
@@ -169,11 +178,17 @@ func (c *APIClient) handle_delete_automation_schedule(ctx *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := service.DeleteSchedule(ctx.Param("id")); err != nil {
+	var body automation_id_body
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		result.Err(ctx, api_code_invalid_params, "请求参数无效")
+		return
+	}
+	id := strings.TrimSpace(body.ID)
+	if err := service.DeleteSchedule(id); err != nil {
 		result.Err(ctx, api_code_invalid_params, err.Error())
 		return
 	}
-	result.Ok(ctx, gin.H{"id": ctx.Param("id")})
+	result.Ok(ctx, gin.H{"id": id})
 }
 
 func (c *APIClient) handle_toggle_automation_schedule(ctx *gin.Context) {
@@ -181,7 +196,12 @@ func (c *APIClient) handle_toggle_automation_schedule(ctx *gin.Context) {
 	if !ok {
 		return
 	}
-	schedule, err := service.ToggleSchedule(ctx.Param("id"))
+	var body automation_id_body
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		result.Err(ctx, api_code_invalid_params, "请求参数无效")
+		return
+	}
+	schedule, err := service.ToggleSchedule(strings.TrimSpace(body.ID))
 	if err != nil {
 		result.Err(ctx, api_code_invalid_params, err.Error())
 		return
@@ -195,7 +215,7 @@ func (c *APIClient) handle_trigger_automation_schedule(ctx *gin.Context) {
 		return
 	}
 	var body automation_schedule_trigger_body
-	if err := ctx.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
+	if err := ctx.ShouldBindJSON(&body); err != nil {
 		result.Err(ctx, api_code_invalid_params, "请求参数无效")
 		return
 	}
@@ -203,7 +223,7 @@ func (c *APIClient) handle_trigger_automation_schedule(ctx *gin.Context) {
 	if trigger_type == "" {
 		trigger_type = model.FlowRunTriggerManual
 	}
-	run, err := service.TriggerScheduleAs(ctx.Param("id"), trigger_type, strings.TrimSpace(body.EventKey))
+	run, err := service.TriggerScheduleAs(strings.TrimSpace(body.ID), trigger_type, strings.TrimSpace(body.EventKey))
 	if err != nil {
 		result.Err(ctx, api_code_invalid_params, err.Error())
 		return
@@ -216,13 +236,17 @@ func (c *APIClient) handle_list_automation_runs(ctx *gin.Context) {
 	if !ok {
 		return
 	}
-	page, page_size := automation_query_page(ctx)
+	var body automation_run_list_body
+	if err := ctx.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
+		result.Err(ctx, api_code_invalid_params, "请求参数无效")
+		return
+	}
 	input := services.ListRunsInput{
-		Page:       page,
-		PageSize:   page_size,
-		ScheduleID: strings.TrimSpace(ctx.Query("schedule_id")),
-		FlowID:     strings.TrimSpace(ctx.Query("flow_id")),
-		Status:     strings.TrimSpace(ctx.Query("status")),
+		Page:       body.Page,
+		PageSize:   body.PageSize,
+		ScheduleID: strings.TrimSpace(body.ScheduleID),
+		FlowID:     strings.TrimSpace(body.FlowID),
+		Status:     strings.TrimSpace(body.Status),
 	}
 	runs, total, err := service.ListRuns(input)
 	if err != nil {
@@ -237,7 +261,12 @@ func (c *APIClient) handle_get_automation_run(ctx *gin.Context) {
 	if !ok {
 		return
 	}
-	run, err := service.GetRun(ctx.Param("id"))
+	var body automation_id_body
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		result.Err(ctx, api_code_invalid_params, "请求参数无效")
+		return
+	}
+	run, err := service.GetRun(strings.TrimSpace(body.ID))
 	if err != nil {
 		result.Err(ctx, api_code_invalid_params, err.Error())
 		return
@@ -250,9 +279,15 @@ func (c *APIClient) handle_cancel_automation_run(ctx *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := service.CancelRun(ctx.Param("id")); err != nil {
+	var body automation_id_body
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		result.Err(ctx, api_code_invalid_params, "请求参数无效")
+		return
+	}
+	id := strings.TrimSpace(body.ID)
+	if err := service.CancelRun(id); err != nil {
 		result.Err(ctx, api_code_invalid_params, err.Error())
 		return
 	}
-	result.Ok(ctx, gin.H{"id": ctx.Param("id"), "cancelled": true})
+	result.Ok(ctx, gin.H{"id": id, "cancelled": true})
 }

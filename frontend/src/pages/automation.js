@@ -1,11 +1,22 @@
-import { AutomationPageViewModel } from "./automation.model.js";
+import {
+  AutomationPageViewModel,
+  calculate_flow_minimap_geometry,
+  calculate_pipeline_node_positions,
+} from "./automation.model.js";
 
 function automation_trigger_badge(props) {
   const type = props.type || "Cron";
+  const variants = {
+    cron: "info",
+    event: "success",
+    manual: "warning",
+  };
+  const normalized = String(type).toLowerCase();
   return Tag(
     {
-      class: `automation-trigger automation-trigger--${String(type).toLowerCase()}`,
-      attributes: { n: `automation-trigger-${String(type).toLowerCase()}` },
+      variant: variants[normalized] || "default",
+      class: "automation-trigger",
+      attributes: { n: `automation-trigger-${normalized}` },
     },
     [props.label],
   );
@@ -23,11 +34,115 @@ function automation_status_badge(value) {
   }
   return Tag(
     {
-      class: `automation-status automation-status--${tone}`,
+      variant: tone,
+      class: "automation-status",
       attributes: { n: `automation-status-${normalized.toLowerCase()}` },
     },
     [normalized],
   );
+}
+
+function automation_activate(event, callback) {
+  if (event.target !== event.currentTarget) return;
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  callback();
+}
+
+function AutomationEmptyState(props = {}) {
+  return View(
+    {
+      class: [
+        "dm-empty-state automation-empty-state",
+        props.compact ? "automation-empty-state--compact" : "",
+        props.detail ? "automation-empty-state--detail" : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+      attributes: {
+        n: props.name || "automation-empty-state",
+        role: "status",
+        "aria-live": "polite",
+      },
+    },
+    [
+      View({ class: "content-state-title" }, [props.title]),
+      props.description
+        ? View({ class: "content-state-text" }, [props.description])
+        : null,
+    ].filter(Boolean),
+  );
+}
+
+function automation_pipeline_href(flow_id, mode) {
+  const search = new URLSearchParams({
+    mode,
+    id: String(flow_id || ""),
+  });
+  return `/automation?${search.toString()}`;
+}
+
+function AutomationPipelineLink(props) {
+  const mode = props.mode === "edit" ? "edit" : "detail";
+  return Link(
+    {
+      class: [
+        "dm-button dm-focus-ring dm-button--sm automation-open-link",
+        props.primary ? "dm-button--primary" : "dm-button--outline",
+      ].join(" "),
+      href: automation_pipeline_href(props.flowId, mode),
+      target: "_blank",
+      attributes: {
+        n: `automation-open-${mode}-${props.flowId}`,
+        rel: "noopener noreferrer",
+        "aria-label": `${props.label}（新标签页）`,
+      },
+    },
+    [
+      Timeless.Icon({
+        name: mode === "edit" ? "edit-3" : "eye",
+        size: 15,
+        attributes: { "aria-hidden": "true" },
+      }),
+      props.label,
+    ],
+  );
+}
+
+function AutomationFeedback(props) {
+  const vm$ = props.store;
+  return View({ class: "automation-feedback container" }, [
+    Show({
+      when: vm$.state.error,
+      ok() {
+        return Alert(
+          {
+            variant: "destructive",
+            class: "automation-alert",
+            attributes: { n: "automation-error-alert" },
+          },
+          [
+            AlertTitle({ attributes: { n: "automation-error-title" } }, [
+              "请求失败",
+            ]),
+            AlertDescription({}, [vm$.state.error.value]),
+          ],
+        );
+      },
+    }),
+    Show({
+      when: vm$.state.notice,
+      ok() {
+        return Alert(
+          {
+            class: "automation-alert",
+            attributes: { n: "automation-notice-alert" },
+          },
+          [AlertDescription({}, [vm$.state.notice.value])],
+        );
+      },
+    }),
+  ]);
 }
 
 function AutomationPageView(props) {
@@ -41,111 +156,54 @@ function AutomationPageView(props) {
       },
     },
     [
-      View({ class: "content-toolbar-wrap container" }, [
-        AutomationPageToolbar({ store: vm$ }),
-      ]),
       Show({
-        when: vm$.state.error,
+        when: computed(vm$.state.view_mode, (mode) => mode === "list"),
         ok() {
-          return View({ class: "container" }, [
-            Alert(
-              {
-                variant: "destructive",
-                class: "automation-alert",
-                attributes: { n: "automation-error-alert" },
-              },
-              [
-                AlertTitle({ attributes: { n: "automation-error-title" } }, [
-                  "请求失败",
-                ]),
-                AlertDescription({}, [vm$.state.error.value]),
-              ],
-            ),
-          ]);
+          return AutomationListPage({ store: vm$ });
         },
       }),
       Show({
-        when: vm$.state.notice,
+        when: computed(vm$.state.view_mode, (mode) => mode === "detail"),
         ok() {
-          return View({ class: "container" }, [
-            Alert(
-              {
-                class: "automation-alert",
-                attributes: { n: "automation-notice-alert" },
-              },
-              [AlertDescription({}, [vm$.state.notice.value])],
-            ),
-          ]);
+          return AutomationDetailPage({ store: vm$ });
         },
       }),
-      View({ class: "content-main container" }, [
-        View(
-          { class: "automation-body", attributes: { n: "automation-body" } },
-          [
-            // AutomationPageSide({ store: vm$ }),
-            View(
-              {
-                class: "automation-side",
-                attributes: { n: "automation-side" },
-              },
-              [
-                Show({
-                  when: computed(vm$.state.tab, (tab) => tab === "pipelines"),
-                  ok() {
-                    return AutomationPipelineList({ store: vm$ });
-                  },
-                }),
-                Show({
-                  when: computed(vm$.state.tab, (tab) => tab === "schedules"),
-                  ok() {
-                    return AutomationScheduleList({ store: vm$ });
-                  },
-                }),
-              ],
-            ),
-            View(
-              {
-                class: "automation-main",
-                attributes: { n: "automation-main" },
-              },
-              [
-                Show({
-                  when: computed(
-                    {
-                      tab: vm$.state.tab,
-                      schedule: vm$.state.selected_schedule,
-                    },
-                    (state) => state.tab === "schedules" && state.schedule,
-                  ),
-                  ok() {
-                    return AutomationScheduleSummary({ store: vm$ });
-                  },
-                }),
-                Show({
-                  when: vm$.state.selected_pipeline,
-                  ok() {
-                    return AutomationPipelineDetail({ store: vm$ });
-                  },
-                }),
-                Show({
-                  when: computed(vm$.state.selected_pipeline, (flow) => !flow),
-                  ok() {
-                    return View(
-                      { class: "automation-empty automation-empty--detail" },
-                      ["请选择或创建一个 Pipeline"],
-                    );
-                  },
-                }),
-              ],
-            ),
-          ],
-        ),
-      ]),
+      Show({
+        when: computed(vm$.state.view_mode, (mode) => mode === "edit"),
+        ok() {
+          return AutomationEditorPage({ store: vm$ });
+        },
+      }),
       AutomationCreatePipelineDialog({ store: vm$ }),
       AutomationAddNodeDialog({ store: vm$ }),
       AutomationCreateScheduleDialog({ store: vm$ }),
+      AutomationDeletePipelineConfirm({ store: vm$ }),
     ],
   );
+}
+
+function AutomationListPage(props) {
+  const vm$ = props.store;
+  return View({ class: "automation-list-page" }, [
+    View({ class: "content-toolbar-wrap container" }, [
+      AutomationPageToolbar({ store: vm$ }),
+    ]),
+    AutomationFeedback({ store: vm$ }),
+    View({ class: "content-main container automation-index" }, [
+      Show({
+        when: computed(vm$.state.tab, (tab) => tab === "pipelines"),
+        ok() {
+          return AutomationPipelineList({ store: vm$ });
+        },
+      }),
+      Show({
+        when: computed(vm$.state.tab, (tab) => tab === "schedules"),
+        ok() {
+          return AutomationScheduleList({ store: vm$ });
+        },
+      }),
+    ]),
+  ]);
 }
 
 function AutomationPageToolbar(props) {
@@ -206,40 +264,72 @@ function AutomationPipelineList(props) {
           pipeline_ && pipeline_.value !== undefined
             ? pipeline_.value
             : pipeline_;
-        const selected = computed(
-          vm$.state.selected_flow_id,
-          (flow_id) => flow_id === pipeline.id,
-        );
         return View(
           {
-            class: computed(
-              selected,
-              (is_selected) =>
-                `automation-card${is_selected ? " is-selected" : ""}`,
-            ),
+            class: "dm-list-card automation-card automation-pipeline-row",
             attributes: {
               n: `automation-pipeline-card-${pipeline.id}`,
-              role: "button",
-              tabindex: "0",
-            },
-            onClick() {
-              vm$.methods.selectPipeline(pipeline.id);
             },
           },
           [
-            View({ class: "automation-card__header" }, [
+            View({ class: "automation-card__main" }, [
+              View({ class: "automation-card__header" }, [
+                View(
+                  {
+                    class: "automation-card__title",
+                    attributes: { title: pipeline.name || pipeline.id },
+                  },
+                  [pipeline.name || pipeline.id],
+                ),
+                automation_trigger_badge({
+                  type: pipeline.trigger_type,
+                  label: vm$.methods.triggerLabel(pipeline.trigger_type),
+                }),
+              ]),
               View(
                 {
-                  class: "automation-card__title",
-                  attributes: { title: pipeline.name || pipeline.id },
+                  class: "automation-card__subtitle",
+                  attributes: { title: pipeline.id },
                 },
-                [pipeline.name || pipeline.id],
+                [pipeline.id],
               ),
+              View({ class: "automation-card__description" }, [
+                pipeline.description || "暂无描述",
+              ]),
             ]),
-            View({ class: "automation-card__subtitle" }, [pipeline.id]),
-            View({ class: "automation-card__meta" }, [
-              View({}, [`${(pipeline.nodes || []).length} 节点`]),
-              View({}, [`${(pipeline.edges || []).length} 连线`]),
+            View({ class: "automation-card__stats" }, [
+              View({ class: "automation-stat" }, [
+                View({ class: "automation-stat__value" }, [
+                  String((pipeline.nodes || []).length),
+                ]),
+                View({ class: "automation-stat__label" }, ["节点"]),
+              ]),
+              View({ class: "automation-stat" }, [
+                View({ class: "automation-stat__value" }, [
+                  String((pipeline.edges || []).length),
+                ]),
+                View({ class: "automation-stat__label" }, ["连线"]),
+              ]),
+              View({ class: "automation-stat automation-stat--time" }, [
+                View({ class: "automation-stat__value" }, [
+                  vm$.methods.formatTime(
+                    pipeline.updated_at || pipeline.created_at,
+                  ),
+                ]),
+                View({ class: "automation-stat__label" }, ["最后更新"]),
+              ]),
+            ]),
+            View({ class: "automation-card__actions" }, [
+              AutomationPipelineLink({
+                flowId: pipeline.id,
+                mode: "detail",
+                label: "详情",
+              }),
+              AutomationPipelineLink({
+                flowId: pipeline.id,
+                mode: "edit",
+                label: "编辑",
+              }),
             ]),
           ],
         );
@@ -251,11 +341,18 @@ function AutomationPipelineList(props) {
         (pipelines) => pipelines.length === 0,
       ),
       ok() {
-        return View({ class: "automation-empty" }, [
-          vm$.state.loading.value
-            ? "正在加载 Pipeline..."
-            : "暂无 Pipeline，点击「创建 Pipeline」新建",
-        ]);
+        return AutomationEmptyState({
+          compact: true,
+          name: "automation-pipeline-list-empty",
+          title: computed(vm$.state.loading, (loading) =>
+            loading ? "正在加载 Pipeline…" : "暂无 Pipeline",
+          ),
+          description: computed(vm$.state.loading, (loading) =>
+            loading
+              ? "正在获取最新的流程配置。"
+              : "点击右上角「创建 Pipeline」开始搭建流程。",
+          ),
+        });
       },
     }),
   ]);
@@ -272,27 +369,13 @@ function AutomationScheduleList(props) {
           schedule_ && schedule_.value !== undefined
             ? schedule_.value
             : schedule_;
-        const selected = computed(
-          vm$.state.selected_schedule_id,
-          (id) => id === schedule.id,
-        );
         const metadata = vm$.methods.scheduleMetadata(schedule);
         return View(
           {
-            class: computed(
-              selected,
-              (is_selected) =>
-                `automation-card automation-card--schedule${
-                  is_selected ? " is-selected" : ""
-                }`,
-            ),
+            class:
+              "dm-list-card automation-card automation-card--schedule automation-schedule-row",
             attributes: {
               n: `automation-schedule-card-${schedule.id}`,
-              role: "button",
-              tabindex: "0",
-            },
-            onClick() {
-              vm$.methods.selectSchedule(schedule.id);
             },
           },
           [
@@ -373,9 +456,18 @@ function AutomationScheduleList(props) {
         (schedules) => schedules.length === 0,
       ),
       ok() {
-        return View({ class: "automation-empty" }, [
-          vm$.state.loading.value ? "正在加载自动化..." : "暂无自动化流程",
-        ]);
+        return AutomationEmptyState({
+          compact: true,
+          name: "automation-schedule-list-empty",
+          title: computed(vm$.state.loading, (loading) =>
+            loading ? "正在加载自动化…" : "暂无自动化流程",
+          ),
+          description: computed(vm$.state.loading, (loading) =>
+            loading
+              ? "正在获取最新的触发计划。"
+              : "选择一个 Pipeline 后即可创建定时、事件或手动触发。",
+          ),
+        });
       },
     }),
   ]);
@@ -391,7 +483,7 @@ function AutomationScheduleSummary(props) {
   const schedule_ = vm$.state.selected_schedule;
   return View(
     {
-      class: "automation-summary",
+      class: "dm-panel automation-summary",
       attributes: { n: "automation-schedule-summary" },
     },
     [
@@ -458,7 +550,7 @@ function AutomationScheduleSummary(props) {
             ]),
           ]),
         );
-        return View({}, children);
+        return View({ class: "automation-summary__grid" }, children);
       }),
       View({ class: "automation-runs" }, [
         View({ class: "automation-section-title" }, ["执行记录"]),
@@ -469,7 +561,7 @@ function AutomationScheduleSummary(props) {
             const run = run_ && run_.value !== undefined ? run_.value : run_;
             return View(
               {
-                class: "automation-run",
+                class: "dm-list-card automation-run",
                 attributes: { n: `automation-run-${run.id}` },
               },
               [
@@ -493,7 +585,12 @@ function AutomationScheduleSummary(props) {
         Show({
           when: computed(vm$.state.runs, (runs) => runs.length === 0),
           ok() {
-            return View({ class: "automation-empty" }, ["暂无执行记录"]);
+            return AutomationEmptyState({
+              compact: true,
+              name: "automation-runs-empty",
+              title: "暂无执行记录",
+              description: "执行 Pipeline 后，运行状态和错误信息会显示在这里。",
+            });
           },
         }),
       ]),
@@ -501,45 +598,168 @@ function AutomationScheduleSummary(props) {
   );
 }
 
+function AutomationWorkspaceToolbar(props) {
+  const vm$ = props.store;
+  const is_edit = props.mode === "edit";
+  return View({ class: "content-toolbar automation-workspace-toolbar" }, [
+    View({ class: "automation-workspace-toolbar__identity" }, [
+      Link(
+        {
+          class:
+            "dm-button dm-button--ghost dm-button--sm dm-focus-ring automation-back-link",
+          href: "/automation",
+          attributes: {
+            n: "automation-back-to-list",
+            "aria-label": "返回 Pipeline 列表",
+          },
+        },
+        [
+          Timeless.Icon({
+            name: "arrow-left",
+            size: 16,
+            attributes: { "aria-hidden": "true" },
+          }),
+          "Pipeline 列表",
+        ],
+      ),
+      View({ class: "automation-workspace-toolbar__divider" }),
+      View({ class: "automation-workspace-toolbar__title-wrap" }, [
+        View({ class: "automation-workspace-toolbar__eyebrow" }, [
+          is_edit ? "编辑 Pipeline" : "Pipeline 详情",
+        ]),
+        View({ class: "automation-workspace-toolbar__title" }, [
+          computed(vm$.state.selected_pipeline, (flow) =>
+            flow ? flow.name || flow.id : vm$.state.selected_flow_id.value,
+          ),
+        ]),
+      ]),
+    ]),
+    View({ class: "automation-workspace-toolbar__actions" }, [
+      is_edit
+        ? Tag(
+            {
+              variant: "warning",
+              class: computed(vm$.state.dirty, (dirty) =>
+                dirty ? "automation-dirty-tag" : "automation-dirty-tag is-clean",
+              ),
+            },
+            [
+              computed(vm$.state.dirty, (dirty) =>
+                dirty ? "有未保存变更" : "已保存",
+              ),
+            ],
+          )
+        : null,
+      Button(
+        {
+          store: vm$.ui.btn_run_flow$,
+          attributes: { n: "automation-run-flow", type: "button" },
+        },
+        ["立即执行"],
+      ),
+      !is_edit
+        ? Button(
+            {
+              store: vm$.ui.btn_schedule_create$,
+              attributes: {
+                n: "automation-create-schedule",
+                type: "button",
+              },
+            },
+            ["创建自动化"],
+          )
+        : null,
+      is_edit
+        ? Button(
+            {
+              store: vm$.ui.btn_save_flow$,
+              attributes: { n: "automation-save-flow", type: "button" },
+            },
+            ["保存 Pipeline"],
+          )
+        : AutomationPipelineLink({
+            flowId: vm$.state.selected_flow_id.value,
+            mode: "edit",
+            label: "编辑 Pipeline",
+            primary: true,
+          }),
+      is_edit
+        ? Button(
+            {
+              store: vm$.ui.btn_delete_flow$,
+              attributes: {
+                n: "automation-delete-flow",
+                type: "button",
+              },
+            },
+            ["删除 Pipeline"],
+          )
+        : null,
+    ].filter(Boolean)),
+  ]);
+}
+
+function AutomationDetailPage(props) {
+  const vm$ = props.store;
+  return View({ class: "automation-detail-page" }, [
+    View({ class: "content-toolbar-wrap container" }, [
+      AutomationWorkspaceToolbar({ store: vm$, mode: "detail" }),
+    ]),
+    AutomationFeedback({ store: vm$ }),
+    View({ class: "content-main container" }, [
+      Show({
+        when: vm$.state.selected_pipeline,
+        ok() {
+          return AutomationPipelineDetail({ store: vm$ });
+        },
+      }),
+      Show({
+        when: computed(vm$.state.selected_pipeline, (flow) => !flow),
+        ok() {
+          return AutomationEmptyState({
+            detail: true,
+            name: "automation-pipeline-detail-empty",
+            title: computed(vm$.state.loading, (loading) =>
+              loading ? "正在加载 Pipeline…" : "未找到 Pipeline",
+            ),
+            description: computed(vm$.state.loading, (loading) =>
+              loading
+                ? "正在获取流程定义和节点信息。"
+                : "请返回列表确认 Pipeline 是否仍然存在。",
+            ),
+          });
+        },
+      }),
+    ]),
+  ]);
+}
+
 function AutomationPipelineDetail(props) {
   const vm$ = props.store;
-  return View({ class: "automation-detail" }, [
+  return View({ class: "dm-panel automation-detail" }, [
     computed(vm$.state.selected_pipeline, (flow) => {
       if (!flow) return null;
       return [
         View({ class: "automation-detail__header" }, [
           View({}, [
             View({ class: "automation-detail__title" }, [flow.name || flow.id]),
-            View({ class: "automation-detail__subtitle" }, [flow.id]),
-          ]),
-          View({ class: "dm-flex dm-items-center dm-gap-2 dm-flex-wrap" }, [
-            Button(
+            View(
               {
-                store: vm$.ui.btn_schedule_create$,
-                attributes: {
-                  n: "automation-create-schedule",
-                  type: "button",
-                },
+                class: "automation-detail__subtitle",
+                attributes: { title: flow.id },
               },
-              ["创建自动化"],
-            ),
-            Button(
-              {
-                store: vm$.ui.btn_run_flow$,
-                attributes: { n: "automation-run-flow", type: "button" },
-              },
-              ["立即执行"],
-            ),
-            Button(
-              {
-                store: vm$.ui.btn_delete_flow$,
-                attributes: { n: "automation-delete-flow", type: "button" },
-              },
-              ["删除"],
+              [flow.id],
             ),
           ]),
+          automation_trigger_badge({
+            type: flow.trigger_type,
+            label: vm$.methods.triggerLabel(flow.trigger_type),
+          }),
         ]),
-        View({ class: "automation-properties" }, [
+        View({ class: "automation-detail__description" }, [
+          flow.description || "暂无描述",
+        ]),
+        View({ class: "dm-panel dm-panel--soft automation-properties" }, [
           View({ class: "automation-summary__item" }, [
             View({ class: "automation-property__label" }, ["上下文 Schema"]),
             View({ class: "automation-code" }, [
@@ -551,76 +771,280 @@ function AutomationPipelineDetail(props) {
             View({ class: "automation-code" }, [flow.start_node_id]),
           ]),
           View({ class: "automation-summary__item" }, [
-            View({ class: "automation-property__label" }, ["未保存变更"]),
+            View({ class: "automation-property__label" }, ["节点 / 连线"]),
             View({}, [
-              computed(vm$.state.dirty, (dirty) => (dirty ? "有" : "无")),
+              `${(flow.nodes || []).length} / ${(flow.edges || []).length}`,
             ]),
           ]),
         ]),
-        View({ class: "automation-editor-bar" }, [
-          Button(
-            {
-              store: vm$.ui.btn_add_node$,
-              attributes: { n: "automation-add-node", type: "button" },
-            },
-            ["添加节点"],
-          ),
-          Button(
-            {
-              store: vm$.ui.btn_save_flow$,
-              attributes: { n: "automation-save-flow", type: "button" },
-            },
-            ["保存 Pipeline"],
-          ),
-        ]),
-        AutomationFlowGraph({ store: vm$ }),
+        View({ class: "automation-section-title" }, ["流程结构"]),
+        AutomationFlowGraph({ store: vm$, editable: false }),
       ];
     }),
   ]);
 }
 
-function automation_edit_layout(nodes) {
-  // Layered layout over the working copy: depth from the start node via
-  // next_ids, x by layer, y by order within the layer.
+function AutomationNodeLibrary(props) {
+  const vm$ = props.store;
+  return View(
+    {
+      class: "dm-panel automation-node-library",
+      attributes: { n: "automation-node-library" },
+    },
+    [
+      View({ class: "automation-editor-panel__header" }, [
+        View({}, [
+          View({ class: "automation-editor-panel__title" }, ["节点库"]),
+          View({ class: "automation-editor-panel__hint" }, [
+            "添加到当前选中节点之后",
+          ]),
+        ]),
+        Button(
+          {
+            store: vm$.ui.btn_add_node$,
+            attributes: {
+              n: "automation-add-node",
+              type: "button",
+              title: "选择并添加节点",
+            },
+          },
+          ["添加"],
+        ),
+      ]),
+      View({ class: "automation-node-library__list" }, [
+        For({
+          each: vm$.state.catalog,
+          key: "type",
+          render(item_) {
+            const item =
+              item_ && item_.value !== undefined ? item_.value : item_;
+            return View(
+              {
+                as: "button",
+                class:
+                  "dm-button dm-button--list-row dm-focus-ring automation-node-library__item",
+                attributes: {
+                  n: `automation-node-library-${item.type}`,
+                  type: "button",
+                  title: `添加${item.name}`,
+                },
+                onClick() {
+                  vm$.methods.openAddDialog(item.type);
+                },
+              },
+              [
+                View({ class: "dm-icon-box automation-node-library__icon" }, [
+                  Timeless.Icon({
+                    name: item.type === "GatewayNode" ? "git-branch" : "box",
+                    size: 15,
+                    attributes: { "aria-hidden": "true" },
+                  }),
+                ]),
+                View({ class: "automation-node-library__copy" }, [
+                  View({ class: "automation-node-library__name" }, [
+                    item.name,
+                  ]),
+                  View({ class: "automation-node-library__description" }, [
+                    item.description,
+                  ]),
+                ]),
+                Timeless.Icon({
+                  name: "plus",
+                  size: 15,
+                  attributes: { "aria-hidden": "true" },
+                }),
+              ],
+            );
+          },
+        }),
+      ]),
+    ],
+  );
+}
+
+function AutomationNodeInspector(props) {
+  const vm$ = props.store;
+  return View(
+    {
+      class: "dm-panel automation-node-inspector",
+      attributes: { n: "automation-node-inspector" },
+    },
+    [
+      View({ class: "automation-editor-panel__header" }, [
+        View({}, [
+          View({ class: "automation-editor-panel__title" }, ["节点配置"]),
+          View({ class: "automation-editor-panel__hint" }, [
+            "修改当前选中节点",
+          ]),
+        ]),
+      ]),
+      computed(vm$.state.selected_edit_node_id, (selected_id) => {
+        const node = (vm$.state.edit_nodes.value || []).find(
+          (item) => item.id === selected_id,
+        );
+        if (!node) {
+          return AutomationEmptyState({
+            compact: true,
+            name: "automation-node-inspector-empty",
+            title: "请选择节点",
+            description: "在画布中选择节点后编辑配置。",
+          });
+        }
+        const is_start = node.id === vm$.state.edit_start_node_id.value;
+        return View({ class: "automation-inspector-form" }, [
+          View({ class: "automation-inspector-meta" }, [
+            Tag({ variant: is_start ? "success" : "info" }, [
+              vm$.methods.flowLabel(node.type),
+            ]),
+            View(
+              {
+                class: "automation-code",
+                attributes: { title: node.id },
+              },
+              [node.id],
+            ),
+          ]),
+          View({ class: "automation-form__field" }, [
+            Label({ class: "automation-form__label" }, ["节点名称"]),
+            Input({
+              store: vm$.ui.input_edit_node_name$,
+              attributes: {
+                n: "automation-edit-node-name",
+                "aria-label": "节点名称",
+              },
+            }),
+          ]),
+          View({ class: "automation-form__field" }, [
+            Label({ class: "automation-form__label" }, ["节点配置 JSON"]),
+            Textarea({
+              store: vm$.ui.input_edit_node_config$,
+              class: "automation-node-config-input",
+              attributes: {
+                n: "automation-edit-node-config",
+                rows: "12",
+                spellcheck: "false",
+                "aria-label": "节点配置 JSON",
+              },
+            }),
+          ]),
+          Button(
+            {
+              store: vm$.ui.btn_apply_node_config$,
+              attributes: {
+                n: "automation-apply-node-config",
+                type: "button",
+              },
+            },
+            ["应用节点配置"],
+          ),
+          View({ class: "automation-inspector-connections" }, [
+            View({ class: "automation-property__label" }, ["后续节点"]),
+            View({ class: "automation-code automation-code--wrap" }, [
+              (node.next_ids || []).join("、") || "无",
+            ]),
+          ]),
+          !is_start
+            ? Button(
+                {
+                  store: vm$.ui.btn_remove_selected_node$,
+                  class: "automation-remove-selected-node",
+                  attributes: {
+                    n: "automation-remove-selected-node",
+                    type: "button",
+                  },
+                },
+                ["删除当前节点"],
+              )
+            : null,
+        ].filter(Boolean));
+      }),
+    ],
+  );
+}
+
+function AutomationEditorPage(props) {
+  const vm$ = props.store;
+  return View({ class: "automation-editor-page" }, [
+    View({ class: "content-toolbar-wrap automation-editor-toolbar-wrap" }, [
+      AutomationWorkspaceToolbar({ store: vm$, mode: "edit" }),
+    ]),
+    AutomationFeedback({ store: vm$ }),
+    Show({
+      when: vm$.state.selected_pipeline,
+      ok() {
+        return View(
+          {
+            class: "automation-editor-workspace",
+            attributes: { n: "automation-editor-workspace" },
+          },
+          [
+            AutomationNodeLibrary({ store: vm$ }),
+            View({ class: "automation-editor-canvas" }, [
+              View({ class: "automation-editor-canvas__header" }, [
+                View({}, [
+                  View({ class: "automation-editor-panel__title" }, [
+                    "工作流画布",
+                  ]),
+                  View({ class: "automation-editor-panel__hint" }, [
+                    computed(vm$.state.edit_nodes, (nodes) =>
+                      `${nodes.length} 个节点 · 点击节点编辑配置`,
+                    ),
+                  ]),
+                ]),
+              ]),
+              AutomationFlowGraph({ store: vm$, editable: true }),
+            ]),
+            AutomationNodeInspector({ store: vm$ }),
+          ],
+        );
+      },
+    }),
+    Show({
+      when: computed(vm$.state.selected_pipeline, (flow) => !flow),
+      ok() {
+        return View({ class: "container" }, [
+          AutomationEmptyState({
+            detail: true,
+            name: "automation-pipeline-editor-empty",
+            title: computed(vm$.state.loading, (loading) =>
+              loading ? "正在加载编辑器…" : "无法打开 Pipeline",
+            ),
+            description: computed(vm$.state.loading, (loading) =>
+              loading
+                ? "正在准备节点库和流程定义。"
+                : "请返回列表确认 Pipeline 是否仍然存在。",
+            ),
+          }),
+        ]);
+      },
+    }),
+  ]);
+}
+
+function automation_edit_layout(nodes, position_overrides) {
   const by_id = {};
   (nodes || []).forEach((node) => {
     by_id[node.id] = node;
   });
-  const layers = {};
-  function walk(node_id, depth) {
-    if (!by_id[node_id]) return;
-    if (layers[node_id] !== undefined && layers[node_id] >= depth) {
-      return;
-    }
-    layers[node_id] = depth;
-    (by_id[node_id].next_ids || []).forEach((next) => walk(next, depth + 1));
-  }
-  const start = (nodes || []).length > 0 ? nodes[0].id : "";
-  (nodes || []).forEach((node) => {
-    if (node.type === "StartNode") walk(node.id, 0);
+  const positions = Object.fromEntries(
+    Object.entries(calculate_pipeline_node_positions(nodes)).map(
+      ([node_id, position]) => [
+        node_id,
+        { left: position.x, top: position.y },
+      ],
+    ),
+  );
+  Object.entries(position_overrides || {}).forEach(([node_id, position]) => {
+    if (!by_id[node_id] || !position) return;
+    positions[node_id] = {
+      left: Math.max(16, Number(position.left) || 0),
+      top: Math.max(16, Number(position.top) || 0),
+    };
   });
-  if (Object.keys(layers).length === 0 && start) walk(start, 0);
-  (nodes || []).forEach((node) => {
-    if (layers[node.id] === undefined) layers[node.id] = 0;
-  });
-  const per_layer = {};
-  const positions = {};
-  let max_depth = 0;
-  (nodes || []).forEach((node) => {
-    const depth = layers[node.id] || 0;
-    max_depth = Math.max(max_depth, depth);
-    per_layer[depth] = per_layer[depth] || [];
-    per_layer[depth].push(node.id);
-  });
-  Object.entries(per_layer).forEach(([depth, ids]) => {
-    ids.forEach((node_id, index) => {
-      positions[node_id] = {
-        left: 40 + Number(depth) * 230,
-        top: 40 + index * 130,
-      };
-    });
-  });
-  const width = 40 + (max_depth + 1) * 230 + 40;
+  const width = Object.values(positions).reduce(
+    (max, position) => Math.max(max, position.left + 270),
+    350,
+  );
   const max_bottom = Object.values(positions).reduce(
     (max, position) => Math.max(max, position.top + 110),
     160,
@@ -631,8 +1055,12 @@ function automation_edit_layout(nodes) {
 function automation_edit_edges(nodes) {
   const edges = [];
   (nodes || []).forEach((node) => {
-    (node.next_ids || []).forEach((target) => {
-      edges.push({ from: node.id, to: target });
+    (node.next_ids || []).forEach((target, index) => {
+      edges.push({
+        id: `${node.id}-${target}-${index}`,
+        from: node.id,
+        to: target,
+      });
     });
   });
   return edges;
@@ -642,63 +1070,578 @@ function automation_edge_path(edge, positions) {
   const from = positions[edge.from];
   const to = positions[edge.to];
   if (!from || !to) return "";
-  const x1 = from.left + 90;
-  const y1 = from.top + 58;
-  const x2 = to.left + 90;
-  const y2 = to.top + 6;
-  const middle = Math.max(36, Math.abs(y2 - y1) / 2);
-  return `M ${x1} ${y1} C ${x1} ${y1 + middle}, ${x2} ${y2 - middle}, ${x2} ${y2}`;
+  const x1 = from.left + 180;
+  const y1 = from.top + 52;
+  const x2 = to.left;
+  const y2 = to.top + 52;
+  const middle = Math.max(36, Math.abs(x2 - x1) / 2);
+  return `M ${x1} ${y1} C ${x1 + middle} ${y1}, ${x2 - middle} ${y2}, ${x2} ${y2}`;
 }
+
+function automation_refresh_flow_canvas(canvas, nodes, position_overrides) {
+  if (!canvas) return;
+  const layout = automation_edit_layout(nodes, position_overrides);
+  canvas.style.width = `${layout.width}px`;
+  canvas.style.height = `${layout.height}px`;
+  canvas.querySelectorAll(".automation-flow-edge").forEach((path) => {
+    const edge = {
+      from: path.getAttribute("data-flow-from"),
+      to: path.getAttribute("data-flow-to"),
+    };
+    path.setAttribute("d", automation_edge_path(edge, layout.positions));
+  });
+}
+
+const automation_flow_min_zoom = 0.25;
+const automation_flow_max_zoom = 2;
+const automation_flow_grid_size = 22;
+const automation_flow_minimap_size = {
+  width: 176,
+  height: 112,
+  padding: 8,
+};
 
 function AutomationFlowGraph(props) {
   const vm$ = props.store;
-  return View(
-    { class: "automation-flow-scroll", attributes: { n: "automation-flow" } },
+  const editable = Boolean(props.editable);
+  const FlowPrimitive = Timeless.ui.FlowPrimitive;
+  const flow$ = new Timeless.vm.FlowCanvasModel({
+    nodes: [],
+    edges: [],
+    nodesDraggable: editable,
+    nodesConnectable: false,
+    multiSelect: false,
+    minZoom: automation_flow_min_zoom,
+    maxZoom: automation_flow_max_zoom,
+  });
+  const position_overrides = {};
+  const flow_node_models = new Map();
+  const viewport_ = refobj({ ...flow$.viewport });
+  const minimap_geometry_ = refobj(
+    calculate_flow_minimap_geometry(
+      { width: 350, height: 320 },
+      { width: 350, height: 320 },
+      flow$.viewport,
+      automation_flow_minimap_size,
+    ),
+  );
+  const flow_edges_ = refarr(
+    automation_edit_edges(vm$.state.edit_nodes.value || []),
+  );
+  let root_element = null;
+  let canvas_element = null;
+  let resize_observer = null;
+  let active_pointer_cleanup = null;
+  let wheel_handler = null;
+  const stop_edge_sync = vm$.state.edit_nodes.subscribe({
+    onChange(nodes) {
+      flow_edges_.as(automation_edit_edges(nodes), { reset: true });
+      refresh_minimap(nodes);
+    },
+  });
+  const stop_viewport_sync = flow$.onViewportChange((viewport) => {
+    viewport_.as({ ...viewport });
+    refresh_minimap();
+  });
+
+  function viewport_size() {
+    return {
+      width: Math.max(1, root_element ? root_element.clientWidth : 1),
+      height: Math.max(1, root_element ? root_element.clientHeight : 1),
+    };
+  }
+
+  function refresh_minimap(nodes = vm$.state.edit_nodes.value) {
+    const layout = automation_edit_layout(nodes, position_overrides);
+    const size = viewport_size();
+    const zoom = Math.max(automation_flow_min_zoom, flow$.viewport.zoom || 1);
+    if (canvas_element) {
+      canvas_element.style.width = `${Math.max(
+        layout.width,
+        size.width / zoom,
+      )}px`;
+      canvas_element.style.height = `${Math.max(
+        layout.height,
+        size.height / zoom,
+      )}px`;
+    }
+    minimap_geometry_.as(
+      calculate_flow_minimap_geometry(
+        layout,
+        size,
+        flow$.viewport,
+        automation_flow_minimap_size,
+      ),
+    );
+  }
+
+  function set_flow_zoom(next_zoom, anchor) {
+    const viewport = flow$.viewport;
+    const old_zoom = Math.max(automation_flow_min_zoom, viewport.zoom || 1);
+    const zoom = Math.min(
+      automation_flow_max_zoom,
+      Math.max(automation_flow_min_zoom, next_zoom),
+    );
+    const size = viewport_size();
+    const point = anchor || {
+      x: size.width / 2,
+      y: size.height / 2,
+    };
+    const world_x = (point.x - viewport.x) / old_zoom;
+    const world_y = (point.y - viewport.y) / old_zoom;
+    flow$.setViewport({
+      x: point.x - world_x * zoom,
+      y: point.y - world_y * zoom,
+      zoom,
+    });
+  }
+
+  function fit_flow_to_view() {
+    const nodes = vm$.state.edit_nodes.value || [];
+    if (nodes.length === 0) {
+      flow$.resetView();
+      return;
+    }
+    const layout = automation_edit_layout(nodes, position_overrides);
+    const bounds = Object.values(layout.positions).reduce(
+      (result, position) => ({
+        min_x: Math.min(result.min_x, position.left),
+        min_y: Math.min(result.min_y, position.top),
+        max_x: Math.max(result.max_x, position.left + 180),
+        max_y: Math.max(result.max_y, position.top + 104),
+      }),
+      {
+        min_x: Infinity,
+        min_y: Infinity,
+        max_x: -Infinity,
+        max_y: -Infinity,
+      },
+    );
+    const size = viewport_size();
+    const padding = 48;
+    const content_width = Math.max(1, bounds.max_x - bounds.min_x);
+    const content_height = Math.max(1, bounds.max_y - bounds.min_y);
+    const zoom = Math.min(
+      1,
+      automation_flow_max_zoom,
+      Math.max(
+        automation_flow_min_zoom,
+        Math.min(
+          (size.width - padding * 2) / content_width,
+          (size.height - padding * 2) / content_height,
+        ),
+      ),
+    );
+    flow$.setViewport({
+      x:
+        (size.width - content_width * zoom) / 2 - bounds.min_x * zoom,
+      y:
+        (size.height - content_height * zoom) / 2 - bounds.min_y * zoom,
+      zoom,
+    });
+  }
+
+  function ensure_flow_node(node, position) {
+    let flow_node = flow_node_models.get(node.id);
+    if (!flow_node) {
+      flow_node = new Timeless.vm.FlowNodeModel({
+        id: node.id,
+        type: node.type,
+        position: { x: position.left, y: position.top },
+        width: 180,
+        height: 104,
+        data: node,
+      });
+      flow_node.setCanvas$(flow$);
+      flow$.addNode(flow_node);
+      flow_node_models.set(node.id, flow_node);
+    } else {
+      flow_node.type = node.type;
+      flow_node.data = node;
+      if (!position_overrides[node.id]) {
+        flow_node.position = { x: position.left, y: position.top };
+      }
+    }
+    return flow_node;
+  }
+
+  function reconcile_flow_nodes(nodes) {
+    const active_ids = new Set((nodes || []).map((node) => node.id));
+    flow_node_models.forEach((flow_node, node_id) => {
+      if (active_ids.has(node_id)) return;
+      flow_node_models.delete(node_id);
+      delete position_overrides[node_id];
+      flow$.removeNode(node_id);
+    });
+    return automation_edit_layout(nodes, position_overrides);
+  }
+
+  function stop_active_pointer() {
+    if (!active_pointer_cleanup) return;
+    const cleanup = active_pointer_cleanup;
+    active_pointer_cleanup = null;
+    cleanup();
+  }
+
+  function start_canvas_pan(event) {
+    if (event.button !== 0) return;
+    const target = event.target;
+    if (
+      target &&
+      typeof target.closest === "function" &&
+      target.closest(
+        ".automation-flow-node-shell, .automation-flow-controls, .automation-flow-minimap",
+      )
+    ) {
+      return;
+    }
+    event.preventDefault();
+    stop_active_pointer();
+    const start_x = event.clientX - flow$.viewport.x;
+    const start_y = event.clientY - flow$.viewport.y;
+    if (root_element) root_element.classList.add("is-panning");
+
+    const handle_move = (move_event) => {
+      flow$.setViewport({
+        x: move_event.clientX - start_x,
+        y: move_event.clientY - start_y,
+      });
+    };
+    const handle_up = () => stop_active_pointer();
+    active_pointer_cleanup = () => {
+      document.removeEventListener("mousemove", handle_move);
+      document.removeEventListener("mouseup", handle_up);
+      if (root_element) root_element.classList.remove("is-panning");
+    };
+    document.addEventListener("mousemove", handle_move);
+    document.addEventListener("mouseup", handle_up);
+  }
+
+  function move_viewport_from_minimap(event, minimap_element) {
+    const geometry = minimap_geometry_.value;
+    if (!geometry || geometry.scale <= 0) return;
+    const rect = minimap_element.getBoundingClientRect();
+    const local_x = Math.min(
+      geometry.offset_x + geometry.world_width * geometry.scale,
+      Math.max(geometry.offset_x, event.clientX - rect.left),
+    );
+    const local_y = Math.min(
+      geometry.offset_y + geometry.world_height * geometry.scale,
+      Math.max(geometry.offset_y, event.clientY - rect.top),
+    );
+    const world_x = (local_x - geometry.offset_x) / geometry.scale;
+    const world_y = (local_y - geometry.offset_y) / geometry.scale;
+    const size = viewport_size();
+    flow$.setViewport({
+      x: size.width / 2 - world_x * flow$.viewport.zoom,
+      y: size.height / 2 - world_y * flow$.viewport.zoom,
+    });
+  }
+
+  function start_minimap_drag(event) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    stop_active_pointer();
+    const minimap_element = event.currentTarget;
+    move_viewport_from_minimap(event, minimap_element);
+
+    const handle_move = (move_event) => {
+      move_viewport_from_minimap(move_event, minimap_element);
+    };
+    const handle_up = () => stop_active_pointer();
+    active_pointer_cleanup = () => {
+      document.removeEventListener("mousemove", handle_move);
+      document.removeEventListener("mouseup", handle_up);
+    };
+    document.addEventListener("mousemove", handle_move);
+    document.addEventListener("mouseup", handle_up);
+  }
+
+  function handle_minimap_keydown(event) {
+    const amount = event.shiftKey ? 120 : 48;
+    const viewport = flow$.viewport;
+    const movement = {
+      ArrowLeft: { x: viewport.x + amount },
+      ArrowRight: { x: viewport.x - amount },
+      ArrowUp: { y: viewport.y + amount },
+      ArrowDown: { y: viewport.y - amount },
+    }[event.key];
+    if (movement) {
+      event.preventDefault();
+      flow$.setViewport(movement);
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      fit_flow_to_view();
+    }
+  }
+
+  function handle_canvas_wheel(event) {
+    event.preventDefault();
+    if (!root_element) return;
+    const rect = root_element.getBoundingClientRect();
+    const sensitivity = event.ctrlKey ? 0.01 : 0.001;
+    const factor = Math.max(0.5, 1 - event.deltaY * sensitivity);
+    set_flow_zoom(flow$.viewport.zoom * factor, {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+    });
+  }
+
+  function start_node_drag(event, node, flow_node) {
+    if (!editable || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    vm$.methods.selectEditNode(node.id);
+
+    const node_element = event.currentTarget;
+    const shell_element = node_element.closest(".automation-flow-node-shell");
+    const canvas_element = node_element.closest(".automation-flow-canvas");
+    if (!shell_element || !canvas_element) return;
+
+    stop_active_pointer();
+    flow_node.pointerDown(event.clientX, event.clientY);
+    shell_element.classList.add("is-dragging");
+    let has_moved = false;
+
+    const handle_move = (move_event) => {
+      flow_node.pointerMove(move_event.clientX, move_event.clientY);
+      const position = {
+        left: Math.max(16, flow_node.position.x),
+        top: Math.max(16, flow_node.position.y),
+      };
+      has_moved = true;
+      flow_node.position = { x: position.left, y: position.top };
+      position_overrides[node.id] = position;
+      vm$.methods.stageEditNodePosition(node.id, {
+        x: position.left,
+        y: position.top,
+      });
+      shell_element.style.left = `${position.left}px`;
+      shell_element.style.top = `${position.top}px`;
+      automation_refresh_flow_canvas(
+        canvas_element,
+        vm$.state.edit_nodes.value,
+        position_overrides,
+      );
+      refresh_minimap();
+    };
+
+    const handle_up = (up_event) => {
+      flow_node.pointerUp(up_event.clientX, up_event.clientY);
+      if (has_moved) {
+        vm$.methods.moveEditNode(node.id, {
+          x: flow_node.position.x,
+          y: flow_node.position.y,
+        });
+      }
+      stop_active_pointer();
+    };
+
+    active_pointer_cleanup = () => {
+      document.removeEventListener("mousemove", handle_move);
+      document.removeEventListener("mouseup", handle_up);
+      shell_element.classList.remove("is-dragging");
+    };
+    document.addEventListener("mousemove", handle_move);
+    document.addEventListener("mouseup", handle_up);
+  }
+
+  function flow_control_button(options) {
+    return View(
+      {
+        as: "button",
+        class:
+          "dm-button dm-button--surface dm-button--icon dm-focus-ring automation-flow-control",
+        attributes: {
+          type: "button",
+          title: options.label,
+          "aria-label": options.label,
+        },
+        onMouseDown(event) {
+          event.stopPropagation();
+        },
+        onClick(event) {
+          event.stopPropagation();
+          options.action();
+        },
+      },
+      [
+        Timeless.Icon({
+          name: options.icon,
+          size: 16,
+          attributes: { "aria-hidden": "true" },
+        }),
+      ],
+    );
+  }
+
+  function minimap_node_style(node) {
+    return computed(minimap_geometry_, (geometry) => {
+      const layout = automation_edit_layout(
+        vm$.state.edit_nodes.value,
+        position_overrides,
+      );
+      const position = layout.positions[node.id] || { left: 0, top: 0 };
+      return {
+        left: `${geometry.offset_x + position.left * geometry.scale}px`,
+        top: `${geometry.offset_y + position.top * geometry.scale}px`,
+        width: `${Math.max(4, 180 * geometry.scale)}px`,
+        height: `${Math.max(4, 104 * geometry.scale)}px`,
+      };
+    });
+  }
+
+  function minimap_viewport_style() {
+    return computed(minimap_geometry_, (geometry) => ({
+      left: `${geometry.viewport.left}px`,
+      top: `${geometry.viewport.top}px`,
+      width: `${geometry.viewport.width}px`,
+      height: `${geometry.viewport.height}px`,
+    }));
+  }
+
+  return FlowPrimitive.Root(
+    {
+      store: flow$,
+      class: [
+        "dm-panel dm-panel--soft automation-flow-scroll",
+        editable ? "is-editable" : "is-readonly",
+      ].join(" "),
+      attributes: {
+        n: "automation-flow",
+        "aria-label": "流程画布",
+      },
+      onMounted(event) {
+        root_element = event.target.get$elm();
+        wheel_handler = handle_canvas_wheel;
+        root_element.addEventListener("wheel", wheel_handler, {
+          passive: false,
+        });
+        if (typeof ResizeObserver !== "undefined") {
+          resize_observer = new ResizeObserver(() => refresh_minimap());
+          resize_observer.observe(root_element);
+        }
+        refresh_minimap();
+      },
+      onMouseDown(event) {
+        start_canvas_pan(event);
+      },
+      beforeUnmounted() {
+        stop_active_pointer();
+        if (resize_observer) resize_observer.disconnect();
+        if (root_element && wheel_handler) {
+          root_element.removeEventListener("wheel", wheel_handler);
+        }
+        stop_edge_sync();
+        stop_viewport_sync();
+      },
+    },
     [
-      View(
+      FlowPrimitive.Background({
+        class: "automation-flow-background",
+        style: computed(viewport_, (viewport) => {
+          const zoom = Math.max(
+            automation_flow_min_zoom,
+            viewport.zoom || 1,
+          );
+          const grid_size = automation_flow_grid_size * zoom;
+          return {
+            "background-position": `${viewport.x}px ${viewport.y}px`,
+            "background-size": `${grid_size}px ${grid_size}px`,
+          };
+        }),
+        attributes: {
+          n: "automation-flow-background",
+          "aria-hidden": "true",
+        },
+      }),
+      FlowPrimitive.Canvas(
         {
+          store: flow$,
           class: "automation-flow-canvas",
-          style: computed(vm$.state.edit_nodes, (nodes) => {
-            const layout = automation_edit_layout(nodes);
-            return `width:${layout.width}px;height:${layout.height}px;`;
-          }),
+          style: combine(
+            {
+              nodes: vm$.state.edit_nodes,
+              minimap: minimap_geometry_,
+              viewport: viewport_,
+            },
+            ({ nodes, viewport }) => {
+              const layout = reconcile_flow_nodes(nodes);
+              const size = viewport_size();
+              const zoom = Math.max(
+                automation_flow_min_zoom,
+                viewport.zoom || 1,
+              );
+              return {
+                width: `${Math.max(layout.width, size.width / zoom)}px`,
+                height: `${Math.max(layout.height, size.height / zoom)}px`,
+                transform:
+                  `translate(${viewport.x}px, ${viewport.y}px) ` +
+                  `scale(${zoom})`,
+                "transform-origin": "0 0",
+              };
+            },
+          ),
+          onMounted(event) {
+            canvas_element = event.target.get$elm();
+            refresh_minimap();
+          },
         },
         [
-          computed(vm$.state.edit_nodes, (nodes) => {
-            const layout = automation_edit_layout(nodes);
-            const edges = automation_edit_edges(nodes)
-              .map((edge) => ({
-                edge,
-                d: automation_edge_path(edge, layout.positions),
-              }))
-              .filter((item) => item.d);
-            if (edges.length === 0) return null;
-            return SVG.SVG(
-              {
-                class: "automation-flow-edges",
-                attributes: {
-                  width: "100%",
-                  height: "100%",
-                  viewBox: `0 0 ${layout.width} ${layout.height}`,
-                  xmlns: "http://www.w3.org/2000/svg",
-                  "aria-hidden": "true",
+          FlowPrimitive.EdgeLayer(
+            { class: "automation-flow-edge-layer" },
+            [
+              For({
+                each: flow_edges_,
+                key: "id",
+                render(edge) {
+                  const path_ = computed(vm$.state.edit_nodes, (nodes) => {
+                    const layout = automation_edit_layout(
+                      nodes,
+                      position_overrides,
+                    );
+                    return automation_edge_path(edge, layout.positions);
+                  });
+                  return SVG.SVG(
+                    {
+                      class: "automation-flow-edges",
+                      width: "100%",
+                      height: "100%",
+                      xmlns: "http://www.w3.org/2000/svg",
+                      "aria-hidden": "true",
+                    },
+                    [
+                      SVG.Path({
+                        class: "automation-flow-edge",
+                        d: path_,
+                        stroke: "currentColor",
+                        "stroke-width": "2",
+                        "stroke-linecap": "round",
+                        fill: "none",
+                        dataset: {
+                          "flow-from": edge.from,
+                          "flow-to": edge.to,
+                        },
+                      }),
+                    ],
+                  );
                 },
-              },
-              edges.map(({ d }) =>
-                SVG.Path({
-                  class: "automation-flow-edge",
-                  attributes: { d, "stroke-width": "1.6", fill: "none" },
-                }),
-              ),
-            );
-          }),
+              }),
+            ],
+          ),
           For({
             each: vm$.state.edit_nodes,
             key: "id",
             render(node_) {
               const node =
                 node_ && node_.value !== undefined ? node_.value : node_;
-              const layout = automation_edit_layout(vm$.state.edit_nodes.value);
+              const layout = automation_edit_layout(
+                vm$.state.edit_nodes.value,
+                position_overrides,
+              );
               const position = layout.positions[node.id] || {
                 left: 20,
                 top: 20,
@@ -706,57 +1649,220 @@ function AutomationFlowGraph(props) {
               const is_start =
                 node.id === vm$.state.edit_start_node_id.value ||
                 node.type === "StartNode";
-              return View(
+              const selected = computed(
+                vm$.state.selected_edit_node_id,
+                (node_id) => editable && node_id === node.id,
+              );
+              const flow_node = ensure_flow_node(node, position);
+              return FlowPrimitive.Node(
                 {
-                  class: `automation-flow-node${is_start ? " is-start" : ""}`,
-                  style: `left:${position.left}px;top:${position.top}px;`,
-                  attributes: {
-                    n: `automation-flow-node-${node.id}`,
-                    title: node.id,
+                  store: flow$,
+                  nodeId: node.id,
+                  class: "automation-flow-node-shell",
+                  style: {
+                    left: `${position.left}px`,
+                    top: `${position.top}px`,
                   },
                 },
                 [
-                  View({ class: "automation-flow-node__header" }, [
-                    View({ class: "automation-flow-node__name" }, [
-                      node.name || node.id,
-                    ]),
-                    View({ class: "automation-flow-node__type" }, [
-                      vm$.methods.flowLabel(node.type),
-                    ]),
-                  ]),
-                  View({ class: "automation-flow-node__id" }, [node.id]),
-                  Show({
-                    when: node.config && Object.keys(node.config).length > 0,
-                    ok() {
-                      return View({ class: "automation-flow-node__schema" }, [
-                        JSON.stringify(node.config),
-                      ]);
+                  View(
+                    {
+                      class: computed(
+                        selected,
+                        (is_selected) =>
+                          `dm-panel automation-flow-node${
+                            is_start ? " is-start" : ""
+                          }${is_selected ? " is-selected" : ""}`,
+                      ),
+                      attributes: {
+                        n: `automation-flow-node-${node.id}`,
+                        title: node.name || node.id,
+                        role: editable ? "button" : undefined,
+                        tabindex: editable ? "0" : undefined,
+                        "aria-pressed": computed(selected, (is_selected) =>
+                          editable ? String(is_selected) : undefined,
+                        ),
+                      },
+                      onMouseDown(event) {
+                        start_node_drag(event, node, flow_node);
+                      },
+                      onClick() {
+                        if (editable) vm$.methods.selectEditNode(node.id);
+                      },
+                      onKeyDown(event) {
+                        if (!editable) return;
+                        automation_activate(event, () =>
+                          vm$.methods.selectEditNode(node.id),
+                        );
+                      },
                     },
-                  }),
-                  Show({
-                    when: !is_start,
-                    ok() {
-                      return View(
+                    [
+                      View({ class: "automation-flow-node__header" }, [
+                        View({ class: "automation-flow-node__name" }, [
+                          node.name || node.id,
+                        ]),
+                        Tag(
+                          {
+                            variant: is_start ? "success" : "info",
+                            class: "automation-flow-node__type",
+                          },
+                          [vm$.methods.flowLabel(node.type)],
+                        ),
+                      ]),
+                      View({ class: "automation-flow-node__id" }, [node.id]),
+                      Show({
+                        when:
+                          node.config && Object.keys(node.config).length > 0,
+                        ok() {
+                          const config_text = JSON.stringify(node.config);
+                          return View(
+                            {
+                              class: "automation-flow-node__schema",
+                              attributes: { title: config_text },
+                            },
+                            [config_text],
+                          );
+                        },
+                      }),
+                    ],
+                  ),
+                  editable
+                    ? View(
                         {
-                          class: "automation-flow-node__remove",
+                          as: "button",
+                          class:
+                            "dm-button dm-button--outline dm-button--icon dm-focus-ring automation-flow-node__add-next",
                           attributes: {
-                            n: `automation-flow-node-remove-${node.id}`,
-                            role: "button",
-                            tabindex: "0",
-                            title: "删除节点",
+                            n: `automation-flow-add-next-${node.id}`,
+                            type: "button",
+                            title: `在「${node.name || node.id}」后新增节点`,
+                            "aria-label": `在「${node.name || node.id}」后新增节点`,
+                            "aria-haspopup": "dialog",
                           },
                           onClick(event) {
                             event.stopPropagation();
-                            vm$.methods.removeNode(node.id);
+                            vm$.methods.openAddDialog("", node.id);
                           },
                         },
-                        ["×"],
-                      );
-                    },
-                  }),
+                        [
+                          Timeless.Icon({
+                            name: "plus",
+                            size: 16,
+                            attributes: { "aria-hidden": "true" },
+                          }),
+                        ],
+                      )
+                    : null,
                 ],
               );
             },
+          }),
+        ],
+      ),
+      FlowPrimitive.Controls(
+        {
+          store: flow$,
+          class: "dm-panel automation-flow-controls",
+          attributes: {
+            n: "automation-flow-controls",
+            "aria-label": "画布缩放控制",
+            role: "group",
+          },
+          onMouseDown(event) {
+            event.stopPropagation();
+          },
+        },
+        [
+          flow_control_button({
+            icon: "plus",
+            label: "放大画布",
+            action() {
+              set_flow_zoom(flow$.viewport.zoom + 0.1);
+            },
+          }),
+          View(
+            {
+              class: "automation-flow-controls__zoom",
+              attributes: { "aria-live": "polite" },
+            },
+            [
+              computed(minimap_geometry_, () =>
+                `${Math.round(flow$.viewport.zoom * 100)}%`,
+              ),
+            ],
+          ),
+          flow_control_button({
+            icon: "minus",
+            label: "缩小画布",
+            action() {
+              set_flow_zoom(flow$.viewport.zoom - 0.1);
+            },
+          }),
+          flow_control_button({
+            icon: "maximize",
+            label: "适应全部节点",
+            action: fit_flow_to_view,
+          }),
+          flow_control_button({
+            icon: "rotate-ccw",
+            label: "重置画布视图",
+            action() {
+              flow$.resetView();
+            },
+          }),
+        ],
+      ),
+      FlowPrimitive.Minimap(
+        {
+          store: flow$,
+          class: "dm-panel automation-flow-minimap dm-focus-ring",
+          attributes: {
+            n: "automation-flow-minimap",
+            role: "button",
+            tabindex: "0",
+            title: "点击或拖动定位画布；方向键移动视图",
+            "aria-label": "流程缩略图，点击或拖动定位，方向键移动视图",
+          },
+          onMouseDown(event) {
+            start_minimap_drag(event);
+          },
+          onClick(event) {
+            event.stopPropagation();
+          },
+          onKeyDown(event) {
+            handle_minimap_keydown(event);
+          },
+        },
+        [
+          View({ class: "automation-flow-minimap__nodes" }, [
+            For({
+              each: vm$.state.edit_nodes,
+              key: "id",
+              render(node_) {
+                const node =
+                  node_ && node_.value !== undefined ? node_.value : node_;
+                const selected = computed(
+                  vm$.state.selected_edit_node_id,
+                  (node_id) => editable && node_id === node.id,
+                );
+                return View({
+                  class: computed(
+                    selected,
+                    (is_selected) =>
+                      `automation-flow-minimap__node${
+                        node.type === "StartNode" ? " is-start" : ""
+                      }${is_selected ? " is-selected" : ""}`,
+                  ),
+                  style: minimap_node_style(node),
+                  attributes: { "aria-hidden": "true" },
+                });
+              },
+            }),
+          ]),
+          View({
+            class: "automation-flow-minimap__viewport",
+            style: minimap_viewport_style(),
+            attributes: { "aria-hidden": "true" },
           }),
         ],
       ),
@@ -772,15 +1878,23 @@ function AutomationTriggerOption(props) {
       class: computed(
         selected,
         (is_selected) =>
-          `automation-trigger-option${is_selected ? " is-selected" : ""}`,
+          `dm-button dm-button--choice-card dm-interactive dm-focus-ring automation-trigger-option${
+            is_selected ? " is-selected" : ""
+          }`,
       ),
       attributes: {
         n: `${props.namePrefix}-trigger-option-${value.toLowerCase()}`,
         role: "radio",
         tabindex: "0",
+        "aria-checked": computed(selected, (is_selected) =>
+          is_selected ? "true" : "false",
+        ),
       },
       onClick() {
         props.onSelect(value);
+      },
+      onKeyDown(event) {
+        automation_activate(event, () => props.onSelect(value));
       },
     },
     [
@@ -808,35 +1922,44 @@ function AutomationCreatePipelineDialog(props) {
       DialogBody({}, [
         View({ class: "automation-form" }, [
           View({ class: "automation-form__legend" }, ["1. 触发方式"]),
-          View({ class: "automation-trigger-options" }, [
-            AutomationTriggerOption({
-              store: vm$,
-              current: vm$.state.create_trigger_type,
-              namePrefix: "create",
-              value: "Cron",
-              label: "定时触发",
-              hint: "按 Cron 计划执行",
-              onSelect: vm$.methods.setCreateTriggerType,
-            }),
-            AutomationTriggerOption({
-              store: vm$,
-              current: vm$.state.create_trigger_type,
-              namePrefix: "create",
-              value: "Event",
-              label: "事件触发",
-              hint: "通过事件 Key 触发",
-              onSelect: vm$.methods.setCreateTriggerType,
-            }),
-            AutomationTriggerOption({
-              store: vm$,
-              current: vm$.state.create_trigger_type,
-              namePrefix: "create",
-              value: "Manual",
-              label: "手动触发",
-              hint: "在页面中手动执行",
-              onSelect: vm$.methods.setCreateTriggerType,
-            }),
-          ]),
+          View(
+            {
+              class: "automation-trigger-options",
+              attributes: {
+                role: "radiogroup",
+                "aria-label": "Pipeline 触发方式",
+              },
+            },
+            [
+              AutomationTriggerOption({
+                store: vm$,
+                current: vm$.state.create_trigger_type,
+                namePrefix: "create",
+                value: "Cron",
+                label: "定时触发",
+                hint: "按 Cron 计划执行",
+                onSelect: vm$.methods.setCreateTriggerType,
+              }),
+              AutomationTriggerOption({
+                store: vm$,
+                current: vm$.state.create_trigger_type,
+                namePrefix: "create",
+                value: "Event",
+                label: "事件触发",
+                hint: "通过事件 Key 触发",
+                onSelect: vm$.methods.setCreateTriggerType,
+              }),
+              AutomationTriggerOption({
+                store: vm$,
+                current: vm$.state.create_trigger_type,
+                namePrefix: "create",
+                value: "Manual",
+                label: "手动触发",
+                hint: "在页面中手动执行",
+                onSelect: vm$.methods.setCreateTriggerType,
+              }),
+            ],
+          ),
           Show({
             when: computed(
               vm$.state.create_trigger_type,
@@ -976,6 +2099,23 @@ function AutomationCreatePipelineDialog(props) {
   );
 }
 
+function AutomationDeletePipelineConfirm(props) {
+  const vm$ = props.store;
+  return Confirm({
+    store: vm$.ui.delete_dialog$,
+    class: "dm-dialog--sm",
+    name: "automation-delete-pipeline",
+    title: "删除 Pipeline",
+    description: computed(vm$.state.selected_pipeline, (flow) =>
+      flow
+        ? `确定删除「${flow.name || flow.id}」？关联的流程定义将停止使用。`
+        : "确定删除当前 Pipeline？",
+    ),
+    cancelText: "取消",
+    okText: "删除 Pipeline",
+  });
+}
+
 function AutomationAddNodeDialog(props) {
   const vm$ = props.store;
   return Dialog(
@@ -1018,7 +2158,7 @@ function AutomationAddNodeDialog(props) {
           Show({
             when: vm$.state.add_type,
             ok() {
-              return View({ class: "automation-form__hint" }, [
+              return View({ class: "dm-alert automation-form__hint" }, [
                 vm$.methods.catalogDescription(vm$.state.add_type.value),
                 "（配置键：",
                 vm$.methods
@@ -1084,35 +2224,44 @@ function AutomationCreateScheduleDialog(props) {
       DialogBody({}, [
         View({ class: "automation-form" }, [
           View({ class: "automation-form__legend" }, ["触发方式"]),
-          View({ class: "automation-trigger-options" }, [
-            AutomationTriggerOption({
-              store: vm$,
-              current: vm$.state.schedule_trigger_type,
-              namePrefix: "schedule",
-              value: "Cron",
-              label: "定时触发",
-              hint: "按 Cron 计划执行",
-              onSelect: vm$.methods.setScheduleTriggerType,
-            }),
-            AutomationTriggerOption({
-              store: vm$,
-              current: vm$.state.schedule_trigger_type,
-              namePrefix: "schedule",
-              value: "Event",
-              label: "事件触发",
-              hint: "通过事件 Key 触发",
-              onSelect: vm$.methods.setScheduleTriggerType,
-            }),
-            AutomationTriggerOption({
-              store: vm$,
-              current: vm$.state.schedule_trigger_type,
-              namePrefix: "schedule",
-              value: "Manual",
-              label: "手动触发",
-              hint: "在列表中手动执行",
-              onSelect: vm$.methods.setScheduleTriggerType,
-            }),
-          ]),
+          View(
+            {
+              class: "automation-trigger-options",
+              attributes: {
+                role: "radiogroup",
+                "aria-label": "自动化流程触发方式",
+              },
+            },
+            [
+              AutomationTriggerOption({
+                store: vm$,
+                current: vm$.state.schedule_trigger_type,
+                namePrefix: "schedule",
+                value: "Cron",
+                label: "定时触发",
+                hint: "按 Cron 计划执行",
+                onSelect: vm$.methods.setScheduleTriggerType,
+              }),
+              AutomationTriggerOption({
+                store: vm$,
+                current: vm$.state.schedule_trigger_type,
+                namePrefix: "schedule",
+                value: "Event",
+                label: "事件触发",
+                hint: "通过事件 Key 触发",
+                onSelect: vm$.methods.setScheduleTriggerType,
+              }),
+              AutomationTriggerOption({
+                store: vm$,
+                current: vm$.state.schedule_trigger_type,
+                namePrefix: "schedule",
+                value: "Manual",
+                label: "手动触发",
+                hint: "在列表中手动执行",
+                onSelect: vm$.methods.setScheduleTriggerType,
+              }),
+            ],
+          ),
           Show({
             when: computed(
               vm$.state.schedule_trigger_type,

@@ -202,6 +202,12 @@ const routes_configure = {
         component: lazy("src/pages/scraper.js", "src/pages/scraper.css"),
         // options: animated_route_options,
       },
+      browser: {
+        title: "浏览器",
+        pathname: "/browser",
+        component: lazy("src/pages/browser.js", "src/pages/browser.css"),
+        // options: animated_route_options,
+      },
       content: {
         title: "内容管理",
         pathname: "/content",

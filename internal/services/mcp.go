@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -38,31 +39,32 @@ type MCPServiceStatus struct {
 type MCPService struct {
 	handler_mu      sync.RWMutex
 	handler         http.Handler
-	handler_factory mcp_handler_factory
+	server          *mcpserver.Server
+	server_factory  mcp_server_factory
 	enabled         atomic.Bool
 }
 
-type mcp_handler_factory func() (http.Handler, error)
+type mcp_server_factory func() (*mcpserver.Server, error)
 
 // NewMCPService constructs an enabled MCP service.
 func NewMCPService(config MCPServiceConfig) (*MCPService, error) {
-	handler, err := build_mcp_handler(config)
+	server, err := build_mcp_server(config)
 	if err != nil {
 		return nil, err
 	}
-	return new_mcp_service(handler), nil
+	return new_mcp_service(server), nil
 }
 
 // NewLazyMCPService constructs a disabled MCP service whose protocol handler
 // is initialized only when Enable is called for the first time.
 func NewLazyMCPService(config MCPServiceConfig) *MCPService {
-	return new_lazy_mcp_service(func() (http.Handler, error) {
-		return build_mcp_handler(config)
+	return new_lazy_mcp_service(func() (*mcpserver.Server, error) {
+		return build_mcp_server(config)
 	})
 }
 
-func build_mcp_handler(config MCPServiceConfig) (http.Handler, error) {
-	server, err := mcpserver.NewServer(mcpserver.Config{
+func build_mcp_server(config MCPServiceConfig) (*mcpserver.Server, error) {
+	return mcpserver.NewServer(mcpserver.Config{
 		APIBaseURL:          config.APIBaseURL,
 		Version:             config.Version,
 		DataReader:          config.DataReader,
@@ -74,20 +76,42 @@ func build_mcp_handler(config MCPServiceConfig) (http.Handler, error) {
 		ZhihuCredentials:    config.ZhihuCredentials,
 		Automation:          config.Automation,
 	})
-	if err != nil {
-		return nil, err
-	}
-	return mcpserver.NewHTTPHandler(server), nil
 }
 
-func new_mcp_service(handler http.Handler) *MCPService {
-	service := &MCPService{handler: handler}
-	service.enabled.Store(handler != nil)
+func new_mcp_service(server *mcpserver.Server) *MCPService {
+	service := &MCPService{server: server}
+	if server != nil {
+		service.handler = mcpserver.NewHTTPHandler(server)
+	}
+	service.enabled.Store(server != nil)
 	return service
 }
 
-func new_lazy_mcp_service(handler_factory mcp_handler_factory) *MCPService {
-	return &MCPService{handler_factory: handler_factory}
+func new_lazy_mcp_service(server_factory mcp_server_factory) *MCPService {
+	return &MCPService{server_factory: server_factory}
+}
+
+func (s *MCPService) ensure_server_locked() error {
+	if s.server != nil {
+		if s.handler == nil {
+			s.handler = mcpserver.NewHTTPHandler(s.server)
+		}
+		return nil
+	}
+	if s.server_factory == nil {
+		return errors.New("MCP 服务未初始化")
+	}
+	server, err := s.server_factory()
+	if err != nil {
+		return err
+	}
+	if server == nil {
+		return errors.New("MCP 服务未初始化")
+	}
+	s.server = server
+	s.handler = mcpserver.NewHTTPHandler(server)
+	s.server_factory = nil
+	return nil
 }
 
 // Enable allows requests to reach the MCP protocol handler.
@@ -97,22 +121,27 @@ func (s *MCPService) Enable() error {
 	}
 	s.handler_mu.Lock()
 	defer s.handler_mu.Unlock()
-	if s.handler == nil {
-		if s.handler_factory == nil {
-			return errors.New("MCP 服务未初始化")
-		}
-		handler, err := s.handler_factory()
-		if err != nil {
-			return err
-		}
-		if handler == nil {
-			return errors.New("MCP 服务未初始化")
-		}
-		s.handler = handler
-		s.handler_factory = nil
+	if err := s.ensure_server_locked(); err != nil {
+		return err
 	}
 	s.enabled.Store(true)
 	return nil
+}
+
+// ExecuteTool makes all MCP tools available to an in-process workflow service
+// node. It initializes a lazy server without changing the HTTP enabled state.
+func (s *MCPService) ExecuteTool(ctx context.Context, name string, arguments map[string]any) (any, error) {
+	if s == nil {
+		return nil, errors.New("MCP 服务未初始化")
+	}
+	s.handler_mu.Lock()
+	if err := s.ensure_server_locked(); err != nil {
+		s.handler_mu.Unlock()
+		return nil, err
+	}
+	server := s.server
+	s.handler_mu.Unlock()
+	return server.ExecuteTool(ctx, name, arguments)
 }
 
 // Disable rejects new MCP protocol requests without destroying the handler.
