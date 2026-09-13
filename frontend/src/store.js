@@ -232,6 +232,21 @@ const routes_configure = {
         component: lazy("src/pages/account.js", "src/pages/account.css"),
         // options: animated_route_options,
       },
+      wxchannels: {
+        title: "视频号播放",
+        pathname: "/wxchannels",
+        component: lazy("src/pages/wxchannels.js", "src/pages/wxchannels.css"),
+        // options: animated_route_options,
+      },
+      automation: {
+        title: "自动化",
+        pathname: "/automation",
+        component: lazy(
+          "src/pages/automation.js",
+          "src/pages/automation.css",
+        ),
+        // options: animated_route_options,
+      },
       logs: {
         title: "日志",
         pathname: "/logs",
