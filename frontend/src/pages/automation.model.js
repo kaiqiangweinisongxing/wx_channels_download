@@ -83,6 +83,7 @@ function flow_label(type) {
     FuncNode: "函数",
     LoopNode: "循环",
     WorkflowNode: "子流程",
+    JSCodeNode: "执行 JS",
   };
   return names[type] || type;
 }
@@ -293,9 +294,11 @@ function normalize_pipeline(value) {
   };
 }
 
-function automation_view_query(props) {
+function automation_view_query(props, fallback_mode) {
   const query = (props && props.view && props.view.query) || {};
-  const requested_mode = String(query.mode || "list").toLowerCase();
+  const requested_mode = String(
+    query.mode || fallback_mode || "list",
+  ).toLowerCase();
   return {
     mode: ["detail", "edit"].includes(requested_mode)
       ? requested_mode
@@ -304,8 +307,8 @@ function automation_view_query(props) {
   };
 }
 
-function AutomationPageViewModel(props) {
-  const view_query = automation_view_query(props);
+function AutomationPageViewModel(props, options) {
+  const view_query = automation_view_query(props, options && options.mode);
   const view_mode_ = ref(view_query.mode);
   const tab_ = ref("pipelines");
   const pipelines_ = refarr([]);
@@ -366,9 +369,26 @@ function AutomationPageViewModel(props) {
   const schedule_flow_id_ = ref("");
   const schedule_submitting_ = ref(false);
 
+  // run-pipeline dialog state
+  const run_open_ = ref(false);
+  const run_submitting_ = ref(false);
+  const run_params_ = refarr([]);
+  const run_error_ = ref("");
+
+  // import-pipeline dialog state
+  const import_open_ = ref(false);
+  const import_submitting_ = ref(false);
+  const import_json_ = ref("");
+  const import_error_ = ref("");
+
+  // list-row delete state
+  const pending_delete_flow_id_ = ref("");
+  const pending_delete_schedule_id_ = ref("");
+
   let request_sequence = 0;
   let node_sequence = 0;
   let param_sequence = 0;
+  let run_param_sequence = 0;
   let disposed = false;
 
   const execution_channel = new AutomationChannelCore(
@@ -436,6 +456,12 @@ function AutomationPageViewModel(props) {
         },
         { client: props.client },
       ),
+      import: new Timeless.kit.RequestCore(
+        function importPipeline(body) {
+          return request.post("/api/v1/automation/import_flow", body);
+        },
+        { client: props.client },
+      ),
     },
     schedule: {
       list: new Timeless.kit.RequestCore(
@@ -453,6 +479,12 @@ function AutomationPageViewModel(props) {
       detail: new Timeless.kit.RequestCore(
         function fetchScheduleDetail(body) {
           return request.post(`/api/v1/automation/get_schedule`, body);
+        },
+        { client: props.client },
+      ),
+      delete: new Timeless.kit.RequestCore(
+        function deleteSchedule(body) {
+          return request.post(`/api/v1/automation/delete_schedule`, body);
         },
         { client: props.client },
       ),
@@ -492,9 +524,22 @@ function AutomationPageViewModel(props) {
       closeable: true,
       footer: false,
     }),
+    run_dialog$: new Timeless.vm.DialogCore({
+      closeable: true,
+      footer: false,
+    }),
+    import_dialog$: new Timeless.vm.DialogCore({
+      closeable: true,
+      footer: false,
+    }),
     delete_dialog$: new Timeless.vm.DialogCore({
       onOk() {
         return delete_flow();
+      },
+    }),
+    schedule_delete_dialog$: new Timeless.vm.DialogCore({
+      onOk() {
+        return delete_schedule();
       },
     }),
     select_add_type$: new Timeless.vm.SelectCore({
@@ -616,6 +661,12 @@ function AutomationPageViewModel(props) {
         schedule_event_key_.as(value);
       },
     }),
+    input_import_json$: new Timeless.vm.InputCore({
+      defaultValue: "",
+      onChange(value) {
+        import_json_.as(value);
+      },
+    }),
     btn_refresh$: new Timeless.vm.ButtonCore({
       variant: "outline",
       disabled: loading_.value,
@@ -627,6 +678,12 @@ function AutomationPageViewModel(props) {
       variant: "primary",
       onClick() {
         return open_create_dialog();
+      },
+    }),
+    btn_import_pipeline$: new Timeless.vm.ButtonCore({
+      variant: "outline",
+      onClick() {
+        return open_import_dialog();
       },
     }),
     btn_create_submit$: new Timeless.vm.ButtonCore({
@@ -691,6 +748,32 @@ function AutomationPageViewModel(props) {
         return trigger_flow();
       },
     }),
+    btn_run_submit$: new Timeless.vm.ButtonCore({
+      variant: "primary",
+      disabled: run_submitting_.value,
+      onClick() {
+        return submit_run();
+      },
+    }),
+    btn_run_cancel$: new Timeless.vm.ButtonCore({
+      variant: "ghost",
+      onClick() {
+        ui.run_dialog$.hide();
+      },
+    }),
+    btn_import_submit$: new Timeless.vm.ButtonCore({
+      variant: "primary",
+      disabled: import_submitting_.value,
+      onClick() {
+        return submit_import();
+      },
+    }),
+    btn_import_cancel$: new Timeless.vm.ButtonCore({
+      variant: "ghost",
+      onClick() {
+        ui.import_dialog$.hide();
+      },
+    }),
     btn_delete_flow$: new Timeless.vm.ButtonCore({
       variant: "danger",
       size: "sm",
@@ -739,6 +822,20 @@ function AutomationPageViewModel(props) {
         return schedule_action(schedule && schedule.id, "trigger");
       },
     }),
+    btn_pipeline_delete$: new Timeless.vm.ButtonInListCore({
+      variant: "danger",
+      size: "xs",
+      onClick(pipeline) {
+        return ask_delete_pipeline(pipeline);
+      },
+    }),
+    btn_schedule_delete$: new Timeless.vm.ButtonInListCore({
+      variant: "danger",
+      size: "xs",
+      onClick(schedule) {
+        return ask_delete_schedule(schedule);
+      },
+    }),
     btn_param_remove$: new Timeless.vm.ButtonInListCore({
       variant: "ghost",
       size: "sm",
@@ -757,6 +854,9 @@ function AutomationPageViewModel(props) {
 
   if (ui.delete_dialog$.okBtn) {
     ui.delete_dialog$.okBtn.setVariant("destructive");
+  }
+  if (ui.schedule_delete_dialog$.okBtn) {
+    ui.schedule_delete_dialog$.okBtn.setVariant("destructive");
   }
 
   loading_.subscribe({
@@ -855,6 +955,38 @@ function AutomationPageViewModel(props) {
     );
   }
 
+  // available_context_keys lists the context keys a ServiceNode argument may be
+  // templated from, structured as { namespace, key } entries. The pipeline's
+  // declared context schema maps to the "input" namespace; every node output
+  // key maps to the "output" namespace.
+  function available_context_keys() {
+    const keys = [];
+    const seen = new Set();
+    const push = (namespace, key) => {
+      const normalized = String(key || "").trim();
+      if (!normalized) return;
+      const token = `${namespace}.${normalized}`;
+      if (seen.has(token)) return;
+      seen.add(token);
+      keys.push({ namespace, key: normalized });
+    };
+    const pipeline = selected_pipeline_.value;
+    const schema =
+      pipeline && Array.isArray(pipeline.context_schema)
+        ? pipeline.context_schema
+        : [];
+    schema.forEach((field) => push("input", field && field.key));
+    (edit_nodes_.value || []).forEach((node) => {
+      const config = node && node.config;
+      if (config && config.output_key) push("output", config.output_key);
+      const output_schema = node && node.output_schema;
+      if (Array.isArray(output_schema)) {
+        output_schema.forEach((field) => push("output", field && field.key));
+      }
+    });
+    return keys;
+  }
+
   function service_form_initial_value(field_schema) {
     if (field_schema.has_default) return field_schema.default;
     if (field_schema.control === "checkbox") return false;
@@ -942,12 +1074,14 @@ function AutomationPageViewModel(props) {
   }
 
   function create_service_tool_form(form_schema) {
+    const context_keys = available_context_keys();
     const fields = {};
     form_schema.forEach((field_schema) => {
       const initial_value = service_form_input_value(
         field_schema,
         service_form_initial_value(field_schema),
       );
+
       let input;
       if (field_schema.control === "select") {
         input = new Timeless.vm.SelectCore({
@@ -976,10 +1110,6 @@ function AutomationPageViewModel(props) {
         input = new Timeless.vm.InputCore({
           defaultValue: initial_value,
           placeholder: field_schema.description || field_schema.name,
-          type:
-            field_schema.type === "integer" || field_schema.type === "number"
-              ? "number"
-              : "string",
           onChange() {
             sync_service_form_config();
           },
@@ -992,9 +1122,21 @@ function AutomationPageViewModel(props) {
         input,
       });
       field.form_schema = field_schema;
+      if (
+        field_schema.control === "input" ||
+        field_schema.control === "textarea"
+      ) {
+        field.suggest_visible = ref(false);
+        field.suggest_keyword = ref("");
+        field.context_keys = context_keys;
+      }
       fields[field_schema.name] = field;
     });
     return new Timeless.vm.ObjectFieldCore({ fields });
+  }
+
+  function is_template(value) {
+    return typeof value === "string" && value.includes("{{");
   }
 
   function service_form_arguments(options = {}) {
@@ -1012,6 +1154,11 @@ function AutomationPageViewModel(props) {
         if (field_schema.required && options.validate_required) {
           throw new Error(`${field_schema.label} 不能为空`);
         }
+        return;
+      }
+
+      if (is_template(raw_value)) {
+        arguments_value[field_schema.name] = raw_value;
         return;
       }
 
@@ -1079,7 +1226,8 @@ function AutomationPageViewModel(props) {
       config = {};
     }
     config.tool_name = tool_name;
-    config.arguments = arguments_value;
+    config.arguments = arguments_value || {};
+    delete config.input_map;
     const encoded = JSON.stringify(config, null, 2);
     add_config_.as(encoded);
     ui.input_add_config$.setValue(encoded, { silence: true });
@@ -1709,11 +1857,9 @@ function AutomationPageViewModel(props) {
       if (from_id) {
         const from_index = nodes.findIndex((node) => node.id === from_id);
         if (from_index >= 0) {
-          new_node.next_ids = nodes[from_index].next_ids.slice();
-          nodes[from_index] = {
-            ...nodes[from_index],
-            next_ids: [node_id],
-          };
+          const next_ids = (nodes[from_index].next_ids || []).slice();
+          if (!next_ids.includes(node_id)) next_ids.push(node_id);
+          nodes[from_index] = { ...nodes[from_index], next_ids };
         }
       }
       nodes.push(new_node);
@@ -1791,17 +1937,32 @@ function AutomationPageViewModel(props) {
     return null;
   }
 
+  function ask_delete_pipeline(pipeline) {
+    pending_delete_flow_id_.as((pipeline && pipeline.id) || "");
+    ui.delete_dialog$.show();
+    return null;
+  }
+
+  function ask_delete_schedule(schedule) {
+    pending_delete_schedule_id_.as((schedule && schedule.id) || "");
+    ui.schedule_delete_dialog$.show();
+    return null;
+  }
+
   async function delete_flow() {
-    const flow_id = selected_flow_id_.value;
+    const flow_id = pending_delete_flow_id_.value || selected_flow_id_.value;
     if (!flow_id) return null;
     error_.as("");
     try {
       const r = await reqs.pipeline.delete.run({ id: flow_id });
       if (r.error) throw request_result_error(r, "Pipeline 删除失败");
       ui.delete_dialog$.hide();
-      selected_flow_id_.as("");
-      selected_pipeline_.as(null);
-      edit_nodes_.as([], { reset: true });
+      pending_delete_flow_id_.as("");
+      if (flow_id === selected_flow_id_.value) {
+        selected_flow_id_.as("");
+        selected_pipeline_.as(null);
+        edit_nodes_.as([], { reset: true });
+      }
       notice_.as("Pipeline 已删除");
       await load_data({ silent: true });
     } catch (err) {
@@ -1810,23 +1971,195 @@ function AutomationPageViewModel(props) {
     return null;
   }
 
-  async function trigger_flow() {
+  async function delete_schedule() {
+    const schedule_id = pending_delete_schedule_id_.value;
+    if (!schedule_id) return null;
+    error_.as("");
+    try {
+      const r = await reqs.schedule.delete.run({ id: schedule_id });
+      if (r.error) throw request_result_error(r, "自动化删除失败");
+      ui.schedule_delete_dialog$.hide();
+      pending_delete_schedule_id_.as("");
+      if (schedule_id === selected_schedule_id_.value) {
+        selected_schedule_id_.as("");
+        runs_.as([], { reset: true });
+      }
+      notice_.as("自动化已删除");
+      await load_data({ silent: true });
+    } catch (err) {
+      set_error(err);
+    }
+    return null;
+  }
+
+  function run_schema_fields() {
+    const pipeline = selected_pipeline_.value;
+    const schema =
+      pipeline && Array.isArray(pipeline.context_schema)
+        ? pipeline.context_schema
+        : [];
+    return schema.filter(
+      (field) => field && typeof field === "object" && field.key,
+    );
+  }
+
+  function new_run_param_row(field) {
+    const key = String(field.key || "").trim();
+    const type = String(field.type || "string").toLowerCase();
+    const required = Boolean(field.required);
+    const row = { uid: ++run_param_sequence, key, type, required, value: undefined };
+    if (type === "boolean") {
+      row.checkbox$ = new Timeless.vm.CheckboxCore({
+        checked: false,
+        onChange(value) {
+          row.value = Boolean(value);
+        },
+      });
+    } else {
+      row.input$ = new Timeless.vm.InputCore({
+        defaultValue: "",
+        placeholder: required ? "必填" : "可选",
+        onChange(value) {
+          row.value = value;
+        },
+      });
+    }
+    return row;
+  }
+
+  function open_run_dialog() {
+    run_params_.as(run_schema_fields().map(new_run_param_row), {
+      reset: true,
+    });
+    run_error_.as("");
+    run_open_.as(true);
+    ui.run_dialog$.show();
+    return null;
+  }
+
+  function coerce_run_param(type, raw) {
+    if (raw === undefined || raw === null) return raw;
+    switch (String(type || "string").toLowerCase()) {
+      case "number": {
+        const num = Number(raw);
+        return Number.isFinite(num) ? num : String(raw);
+      }
+      case "boolean":
+        return raw === true || raw === "true" || raw === "1";
+      case "any":
+        return raw;
+      default:
+        return String(raw);
+    }
+  }
+
+  function build_run_params() {
+    const initial_data = {};
+    const params = run_params_.value || [];
+    for (const param of params) {
+      const key = String(param.key || "").trim();
+      if (!key) continue;
+      const value = coerce_run_param(param.type, param.value);
+      if (value === undefined || value === null || value === "") {
+        if (param.required) {
+          return { error: `请填写必填参数：${key}` };
+        }
+        continue;
+      }
+      initial_data[key] = value;
+    }
+    return { initial_data };
+  }
+
+  async function run_flow_direct(initial_data) {
     const flow_id = selected_flow_id_.value;
     if (!flow_id) return null;
     error_.as("");
     execution_run_status_.as("QUEUED");
-    try {
-      const r = await reqs.pipeline.trigger.run({ id: flow_id });
-      if (r.error) {
+    const r = await reqs.pipeline.trigger.run({ id: flow_id, initial_data });
+    if (r.error) {
       execution_run_status_.as("FAILED");
-      set_error(request_result_error(r, "Pipeline 触发失败"));
-        return;
+      return r;
+    }
+    notice_.as(`已触发执行（${r.data.status || "RUNNING"}）`);
+    return r;
+  }
+
+  async function trigger_flow() {
+    const flow_id = selected_flow_id_.value;
+    if (!flow_id) return null;
+    if (run_schema_fields().length > 0) {
+      open_run_dialog();
+      return null;
+    }
+    try {
+      const r = await run_flow_direct({});
+      if (r && r.error) {
+        set_error(request_result_error(r, "Pipeline 触发失败"));
       }
-      notice_.as(`已触发执行（${r.data.status || "RUNNING"}）`);
     } catch (err) {
-    execution_run_status_.as("FAILED");
+      execution_run_status_.as("FAILED");
       set_error(err);
     }
+    return null;
+  }
+
+  async function submit_run() {
+    if (run_submitting_.value) return null;
+    run_submitting_.as(true);
+    run_error_.as("");
+    try {
+      const built = build_run_params();
+      if (built.error) {
+        run_error_.as(built.error);
+        return null;
+      }
+      const r = await run_flow_direct(built.initial_data);
+      if (r && r.error) {
+        run_error_.as(request_result_error(r, "Pipeline 触发失败").message);
+        return null;
+      }
+      ui.run_dialog$.hide();
+      run_open_.as(false);
+    } catch (err) {
+      run_error_.as(err && err.message ? err.message : String(err || ""));
+      execution_run_status_.as("FAILED");
+    } finally {
+      run_submitting_.as(false);
+    }
+    return null;
+  }
+
+  function open_import_dialog() {
+    import_json_.as("");
+    import_error_.as("");
+    ui.input_import_json$.setValue("", { silence: true });
+    import_open_.as(true);
+    ui.import_dialog$.show();
+    return null;
+  }
+
+  async function submit_import() {
+    if (import_submitting_.value) return null;
+    import_submitting_.as(true);
+    import_error_.as("");
+    try {
+      const raw = String(import_json_.value || "").trim();
+      if (!raw) throw new Error("请粘贴流程定义 JSON");
+      const r = await reqs.pipeline.import.run({ definition: raw });
+      if (r.error) throw request_result_error(r, "Pipeline 导入失败");
+      const flow = r.data;
+      ui.import_dialog$.hide();
+      import_open_.as(false);
+      await load_data({ silent: true });
+      notice_.as("Pipeline 已导入");
+      if (props.history && typeof props.history.push === "function") {
+        props.history.push("root.shell.flow_edit", { id: flow.id });
+      }
+    } catch (err) {
+      import_error_.as(err && err.message ? err.message : String(err || ""));
+    }
+    import_submitting_.as(false);
     return null;
   }
 
@@ -1982,7 +2315,14 @@ function AutomationPageViewModel(props) {
     removeNode: remove_node,
     saveFlow: save_flow,
     deleteFlow: delete_flow,
+    askDeletePipeline: ask_delete_pipeline,
+    askDeleteSchedule: ask_delete_schedule,
+    deleteSchedule: delete_schedule,
     triggerFlow: trigger_flow,
+    submitRun: submit_run,
+    runSchemaFields: run_schema_fields,
+    openImportDialog: open_import_dialog,
+    submitImport: submit_import,
     openScheduleDialog: open_schedule_dialog,
     setScheduleTriggerType: set_schedule_trigger_type,
     scheduleMetadata: schedule_metadata,
@@ -2078,6 +2418,16 @@ function AutomationPageViewModel(props) {
     schedule_event_key: schedule_event_key_,
     schedule_name: schedule_name_,
     schedule_cron: schedule_cron_,
+    run_open: run_open_,
+    run_submitting: run_submitting_,
+    run_params: run_params_,
+    run_error: run_error_,
+    import_open: import_open_,
+    import_submitting: import_submitting_,
+    import_json: import_json_,
+    import_error: import_error_,
+    delete_flow_id: pending_delete_flow_id_,
+    delete_schedule_id: pending_delete_schedule_id_,
   };
 
   return { state, ui, methods };

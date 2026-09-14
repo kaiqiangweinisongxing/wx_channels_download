@@ -58,6 +58,15 @@ func user_flow_node_catalog() []UserFlowNodeCatalogItem {
 			},
 		},
 		{
+			Type:        "JSCodeNode",
+			Name:        "执行 JS",
+			Description: "用 JavaScript 处理流程上下文，返回值写回上下文",
+			ConfigKeys: []UserFlowConfigKey{
+				{Key: "code", Type: "string", Required: true, Description: "JavaScript 代码，可通过 data 访问流程上下文"},
+				{Key: "output_key", Type: "string", Required: false, Description: "结果写入上下文的键；留空且返回对象时，对象字段合并回上下文"},
+			},
+		},
+		{
 			Type:        "GatewayNode",
 			Name:        "条件分支",
 			Description: "按条件表达式路由到不同节点",
@@ -230,6 +239,117 @@ func (s *AutomationService) CreateUserFlow(input CreateUserFlowInput) (*model.Us
 	}
 	s.register_user_flow(definition)
 	return &flow, nil
+}
+
+// ImportUserFlow creates a new pipeline from a full flow definition JSON (the
+// same shape persisted in a UserFlow.Definition). Node ids, edges, context
+// schema and the start node are taken from the imported definition; a fresh
+// flow id is always generated so an import never overwrites an existing flow.
+func (s *AutomationService) ImportUserFlow(raw string) (*model.UserFlow, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("自动化服务未初始化")
+	}
+	definition, err := decode_user_flow_definition(raw)
+	if err != nil {
+		return nil, err
+	}
+	if err := normalize_user_flow_definition(definition); err != nil {
+		return nil, err
+	}
+	now := time.Now().UnixMilli()
+	flow := model.UserFlow{
+		ID:          fmt.Sprintf("%s%d", user_flow_id_prefix, time.Now().UnixNano()),
+		Name:        definition.Name,
+		TriggerType: model.FlowRunTriggerCron,
+		Timestamps: model.Timestamps{
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+	}
+	definition.ID = flow.ID
+	encoded, err := json.Marshal(definition)
+	if err != nil {
+		return nil, fmt.Errorf("流程定义无法序列化: %w", err)
+	}
+	flow.Definition = string(encoded)
+	if err := s.db.Create(&flow).Error; err != nil {
+		return nil, fmt.Errorf("导入流程失败: %w", err)
+	}
+	s.register_user_flow(*definition)
+	return &flow, nil
+}
+
+// normalize_user_flow_definition validates an imported definition and rewrites
+// each node so its id, config["id"], NextNodeIDs and NextNodes stay consistent.
+// The engine drives ordinary nodes via NextNodes but ManualNode via NextNodeIDs,
+// so both representations must agree for an imported graph to run correctly.
+func normalize_user_flow_definition(definition *engine.FlowDefinition) error {
+	name := strings.TrimSpace(definition.Name)
+	if name == "" {
+		return fmt.Errorf("流程定义缺少 name")
+	}
+	if definition.Nodes == nil || len(definition.Nodes) == 0 {
+		return fmt.Errorf("流程定义缺少节点")
+	}
+	start_node_id := strings.TrimSpace(definition.StartNodeID)
+	if start_node_id == "" {
+		return fmt.Errorf("流程定义缺少开始节点")
+	}
+	if _, ok := definition.Nodes[start_node_id]; !ok {
+		return fmt.Errorf("开始节点不存在: %s", start_node_id)
+	}
+	normalized := make(map[string]engine.NodeDefinition, len(definition.Nodes))
+	for node_id, node := range definition.Nodes {
+		node_id = strings.TrimSpace(node_id)
+		if node_id == "" {
+			return fmt.Errorf("节点 id 不能为空")
+		}
+		if !user_flow_allows_node_type(node.Type) {
+			return fmt.Errorf("节点类型不支持: %s", node.Type)
+		}
+		if node.Config == nil {
+			node.Config = map[string]interface{}{}
+		}
+		if err := validate_user_flow_node_config(node.Type, node.Config); err != nil {
+			return fmt.Errorf("节点 %s 配置无效: %w", node_id, err)
+		}
+		node.ID = node_id
+		node.Config["id"] = node_id
+		next_ids := make([]string, 0)
+		seen := map[string]bool{}
+		for _, next := range node.NextNodeIDs {
+			next = strings.TrimSpace(next)
+			if next != "" && !seen[next] {
+				seen[next] = true
+				next_ids = append(next_ids, next)
+			}
+		}
+		for _, target := range node.NextNodes {
+			target_id := strings.TrimSpace(target.TargetID)
+			if target_id != "" && !seen[target_id] {
+				seen[target_id] = true
+				next_ids = append(next_ids, target_id)
+			}
+		}
+		next_nodes := make([]engine.TargetNode, 0, len(next_ids))
+		for _, next := range next_ids {
+			next_nodes = append(next_nodes, engine.TargetNode{TargetID: next})
+		}
+		node.NextNodeIDs = next_ids
+		node.NextNodes = next_nodes
+		normalized[node_id] = node
+	}
+	for node_id, node := range normalized {
+		for _, next_id := range node.NextNodeIDs {
+			if _, ok := normalized[next_id]; !ok {
+				return fmt.Errorf("节点 %s 指向了不存在的节点: %s", node_id, next_id)
+			}
+		}
+	}
+	definition.Name = name
+	definition.StartNodeID = start_node_id
+	definition.Nodes = normalized
+	return nil
 }
 
 // GetUserFlow loads one user pipeline by id.
@@ -415,7 +535,7 @@ func (s *AutomationService) UserFlowVisualization(flow_id string) (*flowengine.F
 // behaviour is fully described by JSON config.
 func user_flow_allows_node_type(node_type string) bool {
 	switch node_type {
-	case "StartNode", "EndNode", "ExprNode", "GatewayNode", "APICallNode", "ManualNode", "ServiceNode":
+	case "StartNode", "EndNode", "ExprNode", "GatewayNode", "APICallNode", "ManualNode", "ServiceNode", "JSCodeNode":
 		return true
 	default:
 		return false
@@ -495,8 +615,9 @@ func SortedUserFlowNodeCatalog() []UserFlowNodeCatalogItem {
 
 // TriggerFlowDirect runs any user pipeline immediately as a manual/debug
 // execution. The flow's persisted Cron/Event trigger configuration remains
-// unchanged and continues to control automatic executions.
-func (s *AutomationService) TriggerFlowDirect(flow_id string) (*model.FlowRunRecord, error) {
+// unchanged and continues to control automatic executions. initial_data, when
+// non-empty, seeds the flow context with the caller-supplied input parameters.
+func (s *AutomationService) TriggerFlowDirect(flow_id string, initial_data map[string]interface{}) (*model.FlowRunRecord, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("自动化服务未初始化")
 	}
@@ -510,6 +631,10 @@ func (s *AutomationService) TriggerFlowDirect(flow_id string) (*model.FlowRunRec
 	if _, err := decode_user_flow_definition(flow.Definition); err != nil {
 		return nil, err
 	}
+	encoded_initial_data, err := marshal_initial_data(initial_data)
+	if err != nil {
+		return nil, err
+	}
 	run_key := "direct-" + flow.ID
 	if _, claimed := s.running.LoadOrStore(run_key, struct{}{}); claimed {
 		return nil, fmt.Errorf("流程 %s 正在执行中", flow.ID)
@@ -519,7 +644,7 @@ func (s *AutomationService) TriggerFlowDirect(flow_id string) (*model.FlowRunRec
 		ID:          "",
 		FlowID:      flow.ID,
 		CronExpr:    "@daily",
-		InitialData: "{}",
+		InitialData: encoded_initial_data,
 		TimeoutSec:  default_schedule_timeout_sec,
 	}, model.FlowRunTriggerManual, ""), nil
 }

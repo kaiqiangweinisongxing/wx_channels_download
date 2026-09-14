@@ -36,6 +36,7 @@ func TestAutomationRoutesUsePostActionNames(t *testing.T) {
 		"/api/v1/automation/cancel_run":       false,
 		"/api/v1/automation/list_flows":       false,
 		"/api/v1/automation/create_flow":      false,
+		"/api/v1/automation/import_flow":      false,
 		"/api/v1/automation/get_flow":         false,
 		"/api/v1/automation/update_flow":      false,
 		"/api/v1/automation/delete_flow":      false,

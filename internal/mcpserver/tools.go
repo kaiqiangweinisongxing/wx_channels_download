@@ -173,6 +173,8 @@ func (s *Server) supports_tool(name string) bool {
 		return s.data_reader != nil || s.api_client != nil
 	case "delete_download_tasks":
 		return s.download_task_deleter != nil
+	case "create_download_task":
+		return s.download_task_creator != nil || s.api_client != nil
 	case "deploy_sph_worker":
 		return s.sph_deployer != nil
 	case get_zhihu_credential_status_tool_name,
@@ -254,6 +256,8 @@ func (s *Server) execute_tool(ctx context.Context, name string, raw_arguments js
 		return s.get_download_task_detail(ctx, raw_arguments)
 	case "delete_download_tasks":
 		return s.delete_download_tasks(ctx, raw_arguments)
+	case "create_download_task":
+		return s.create_download_task_tool(ctx, raw_arguments)
 	case "get_accounts":
 		return s.get_accounts(ctx, raw_arguments)
 	case "get_browse_history":

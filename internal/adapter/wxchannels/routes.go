@@ -203,7 +203,7 @@ func (r *WebsocketRoutes) HandleFetchLiveProfile(ctx *gin.Context) {
 	nid := ctx.Query("nid")
 	live_id := ctx.Query("id")
 
-	resp, err := r.client.FetchLiveInfo(username, oid, nid, live_id)
+	resp, err := r.client.FetchLiveProfile(username, oid, nid, live_id)
 	if err != nil {
 		result.Err(ctx, 400, err.Error())
 		return

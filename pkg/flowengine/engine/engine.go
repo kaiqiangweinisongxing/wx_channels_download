@@ -221,7 +221,7 @@ func (e *FlowEngine) StartFlowWithOptions(flow_id string, initial_data map[strin
 		TriggerKey:   trigger.Key,
 	}
 	for key, value := range initial_data {
-		ctx.Data[key] = value
+		ctx.SetInput(key, value)
 	}
 
 	e.Lock()
@@ -713,7 +713,7 @@ func (e *FlowEngine) RunNodeStandalone(def NodeDefinition, input map[string]inte
 		EngineRef:    e,
 	}
 	for k, v := range input {
-		ctx.Data[k] = v
+		ctx.SetInput(k, v)
 	}
 
 	node := e.createNodeImpl(def)
@@ -758,7 +758,7 @@ func (e *FlowEngine) CompleteManualTask(ins_id, node_id string, input_data map[s
 	if input_data != nil {
 		ctx.Mu.Lock()
 		for key, value := range input_data {
-			ctx.Data[key] = value
+			ctx.SetInput(key, value)
 		}
 		ctx.Mu.Unlock()
 	}

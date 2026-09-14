@@ -26,6 +26,7 @@ type DownloadTaskListQuery struct {
 	Statuses     []int
 	ParentTaskID int
 	RootTaskID   int
+	ContentID    string
 }
 
 // AccountListQuery describes a read-only account query.
@@ -105,11 +106,12 @@ type DownloadTaskCreator interface {
 }
 
 type download_task_list_arguments struct {
-	Page         int   `json:"page"`
-	PageSize     int   `json:"page_size"`
-	Statuses     []int `json:"statuses"`
-	ParentTaskID int   `json:"parent_task_id"`
-	RootTaskID   int   `json:"root_task_id"`
+	Page         int    `json:"page"`
+	PageSize     int    `json:"page_size"`
+	Statuses     []int  `json:"statuses"`
+	ParentTaskID int    `json:"parent_task_id"`
+	RootTaskID   int    `json:"root_task_id"`
+	ContentID    string `json:"content_id"`
 }
 
 type download_task_detail_arguments struct {
@@ -119,6 +121,19 @@ type download_task_detail_arguments struct {
 type delete_download_tasks_arguments struct {
 	TaskIDs     []int `json:"task_ids"`
 	DeleteFiles bool  `json:"delete_files"`
+}
+
+type create_download_task_arguments struct {
+	Platform        string          `json:"platform"`
+	Content         json.RawMessage `json:"content"`
+	BuildFromFetch  bool            `json:"build_from_fetch"`
+	ResourceIndexes []int           `json:"resource_indexes"`
+	DownloadDir     string          `json:"download_dir"`
+	Filename        string          `json:"filename"`
+	Config          map[string]any  `json:"config"`
+	AutoStart       *bool           `json:"auto_start"`
+	ParentTaskID    *int            `json:"parent_task_id"`
+	RelationType    string          `json:"relation_type"`
 }
 
 type account_list_arguments struct {
@@ -168,6 +183,7 @@ func (s *Server) get_download_tasks(ctx context.Context, raw_arguments json.RawM
 		Statuses:     arguments.Statuses,
 		ParentTaskID: arguments.ParentTaskID,
 		RootTaskID:   arguments.RootTaskID,
+		ContentID:    strings.TrimSpace(arguments.ContentID),
 	}
 	if s.data_reader != nil {
 		value, read_err := s.data_reader.ListDownloadTasks(ctx, query)
@@ -185,6 +201,9 @@ func (s *Server) get_download_tasks(ctx context.Context, raw_arguments json.RawM
 	}
 	if query.RootTaskID > 0 {
 		values.Set("root_task_id", strconv.Itoa(query.RootTaskID))
+	}
+	if query.ContentID != "" {
+		values.Set("content_id", query.ContentID)
 	}
 	if len(query.Statuses) > 0 {
 		values.Set("status", join_ints(query.Statuses))
@@ -232,6 +251,50 @@ func (s *Server) delete_download_tasks(ctx context.Context, raw_arguments json.R
 		return nil, err
 	}
 	return successful_tool_result(map[string]any{"results": results})
+}
+
+func (s *Server) create_download_task_tool(ctx context.Context, raw_arguments json.RawMessage) (map[string]any, error) {
+	var arguments create_download_task_arguments
+	if err := decode_tool_arguments(raw_arguments, &arguments); err != nil {
+		return nil, err
+	}
+	platform := strings.TrimSpace(arguments.Platform)
+	if platform == "" {
+		return nil, fmt.Errorf("platform 不能为空")
+	}
+	if !has_json_value(arguments.Content) {
+		return nil, fmt.Errorf("content 不能为空")
+	}
+	create_result, err := s.create_download_task(ctx, DownloadTaskCreateRequest{
+		Platform:        platform,
+		Content:         arguments.Content,
+		BuildFromFetch:  arguments.BuildFromFetch,
+		ResourceIndexes: arguments.ResourceIndexes,
+		DownloadDir:     strings.TrimSpace(arguments.DownloadDir),
+		Filename:        strings.TrimSpace(arguments.Filename),
+		Config:          arguments.Config,
+		AutoStart:       arguments.AutoStart,
+		ParentTaskID:    arguments.ParentTaskID,
+		RelationType:    strings.TrimSpace(arguments.RelationType),
+	}, "创建下载任务失败")
+	if err != nil {
+		return nil, err
+	}
+	if create_result.Skipped {
+		return successful_tool_result(map[string]any{
+			"created":       false,
+			"started":       false,
+			"skipped":       true,
+			"existing_task": create_result.Task,
+		})
+	}
+	return successful_tool_result(map[string]any{
+		"created": true,
+		"started": true,
+		"skipped": false,
+		"task":    create_result.Task,
+		"ids":     create_result.IDs,
+	})
 }
 
 func (s *Server) get_accounts(ctx context.Context, raw_arguments json.RawMessage) (map[string]any, error) {

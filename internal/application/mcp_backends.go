@@ -75,6 +75,7 @@ func (r *mcp_data_reader) ListDownloadTasks(ctx context.Context, query mcpserver
 		Statuses:     query.Statuses,
 		ParentTaskID: query.ParentTaskID,
 		RootTaskID:   query.RootTaskID,
+		ContentID:    query.ContentID,
 	})
 }
 

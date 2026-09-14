@@ -245,10 +245,14 @@ function flow_record(id, name, nodes) {
 }
 
 test("automation binds canvas geometry with Timeless style objects", () => {
-  const source = readFileSync(
-    path.join(__dirname, "../src/pages/automation.js"),
-    "utf8",
-  );
+  const source = [
+    "../src/pages/flow.components.js",
+    "../src/pages/flow_edit.js",
+    "../src/pages/flow_detail.js",
+    "../src/pages/automation.js",
+  ]
+    .map((file) => readFileSync(path.join(__dirname, file), "utf8"))
+    .join("\n");
   const stylesheet = readFileSync(
     path.join(__dirname, "../src/pages/automation.css"),
     "utf8",

@@ -1102,6 +1102,10 @@
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
+        "content_id": {
+          "description": "只返回关联该内容 ID 的下载任务。",
+          "type": "string"
+        },
         "page": {
           "default": 1,
           "description": "页码，从 1 开始。",
@@ -1202,6 +1206,77 @@
     },
     "name": "delete_download_tasks",
     "title": "删除下载任务"
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "直接创建并启动一个下载任务。platform 指定内容平台，content 是平台归一化后的内容对象，config 可携带 existing_action、video_variant_key 等下载配置。相比 download_content 或 download_wxchannels_video，此工具不做链接解析，只调用下载任务服务。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "platform": {
+          "description": "内容平台 ID，例如 wxchannels。",
+          "minLength": 1,
+          "type": "string"
+        },
+        "content": {
+          "description": "平台归一化后的内容对象，必须包含平台下载所需的字段。",
+          "type": "object"
+        },
+        "build_from_fetch": {
+          "default": false,
+          "description": "是否按抓取结果构建下载任务。",
+          "type": "boolean"
+        },
+        "resource_indexes": {
+          "description": "要下载的资源下标列表。",
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "download_dir": {
+          "description": "下载目录；留空时使用应用配置。",
+          "type": "string"
+        },
+        "filename": {
+          "description": "可选的自定义文件名。",
+          "type": "string"
+        },
+        "config": {
+          "additionalProperties": true,
+          "description": "下载配置，例如 existing_action、video_variant_key。",
+          "type": "object"
+        },
+        "auto_start": {
+          "default": true,
+          "description": "创建后是否立即启动，默认 true。",
+          "type": "boolean"
+        },
+        "parent_task_id": {
+          "description": "可选的父任务 ID，用于建立任务关联。",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "relation_type": {
+          "description": "与父任务的关系类型。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "platform",
+        "content"
+      ],
+      "type": "object"
+    },
+    "name": "create_download_task",
+    "title": "创建下载任务"
   },
   {
     "annotations": {

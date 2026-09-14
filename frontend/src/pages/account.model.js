@@ -356,10 +356,10 @@ function AccountViewModel(props) {
         { client: props.client },
       ),
       details: new Timeless.kit.RequestCore(
-        (request) => {
+        (body) => {
           return request.get(
-            `/api/account/${encodeURIComponent(request.scope)}/content/list`,
-            request.params,
+            `/api/account/${encodeURIComponent(body.scope)}/content/list`,
+            body.params,
           );
         },
         { client: props.client },

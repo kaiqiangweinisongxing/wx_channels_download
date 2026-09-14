@@ -54,6 +54,99 @@ func TestCreateUserFlowRequiresEventKeyForEventTrigger(t *testing.T) {
 	}
 }
 
+func TestImportUserFlowBuildsFullGraph(t *testing.T) {
+	service := new_user_flow_service(t)
+	raw := `{
+		"name": "导入流程",
+		"start_node": "start",
+		"context_schema": [{"key":"url","type":"string","required":true}],
+		"nodes": {
+			"start": {"id":"start","type":"StartNode","name":"开始","next_node_ids":["calc"]},
+			"calc": {"id":"calc","type":"ExprNode","name":"计算","config":{"expression":"1 + 1"},"next_node_ids":["end"]},
+			"end": {"id":"end","type":"EndNode","name":"结束"}
+		}
+	}`
+	flow, err := service.ImportUserFlow(raw)
+	if err != nil {
+		t.Fatalf("import failed: %v", err)
+	}
+	definition, err := decode_user_flow_definition(flow.Definition)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if definition.ID != flow.ID {
+		t.Fatalf("definition id = %s, want flow id %s", definition.ID, flow.ID)
+	}
+	if definition.StartNodeID != "start" {
+		t.Fatalf("start node id = %s, want start", definition.StartNodeID)
+	}
+	if len(definition.Nodes) != 3 {
+		t.Fatalf("expected 3 nodes, got %d", len(definition.Nodes))
+	}
+	start := definition.Nodes["start"]
+	if len(start.NextNodeIDs) != 1 || start.NextNodeIDs[0] != "calc" {
+		t.Fatalf("start NextNodeIDs = %+v", start.NextNodeIDs)
+	}
+	if len(start.NextNodes) != 1 || start.NextNodes[0].TargetID != "calc" {
+		t.Fatalf("start NextNodes = %+v", start.NextNodes)
+	}
+	if service.flow_engine.FlowDefinitions[flow.ID].ID != flow.ID {
+		t.Fatal("imported flow was not registered into the engine")
+	}
+}
+
+func TestImportUserFlowWithGatewayAndServiceNodes(t *testing.T) {
+	service := new_user_flow_service(t)
+	raw := `{
+		"name": "手动触发：直播下载流程",
+		"start_node": "start",
+		"context_schema": [{"key":"username","type":"string","required":true}],
+		"nodes": {
+			"start": {"id":"start","type":"StartNode","name":"开始","next_node_ids":["fetch_videos"]},
+			"fetch_videos": {"id":"fetch_videos","type":"ServiceNode","name":"获取视频列表","config":{"tool_name":"get_wxchannels_account_videos","arguments":{"username":"{{input.username}}"},"output_key":"videos"},"next_node_ids":["check_live"]},
+			"check_live": {"id":"check_live","type":"GatewayNode","name":"是否直播","config":{"gateway_type":"Exclusive","is_joining":false,"rules":[{"condition":"len(videos.data.object) > 0 && videos.data.object[0].liveInfo != nil","target_id":"download_live"},{"condition":"true","target_id":"end"}]},"next_node_ids":["download_live","end"]},
+			"download_live": {"id":"download_live","type":"ServiceNode","name":"创建直播下载任务","config":{"tool_name":"download_wxchannels_live","arguments":{"account":"{{input.username}}"}},"next_node_ids":["end"]},
+			"end": {"id":"end","type":"EndNode","name":"结束"}
+		}
+	}`
+	flow, err := service.ImportUserFlow(raw)
+	if err != nil {
+		t.Fatalf("import failed: %v", err)
+	}
+	definition, err := decode_user_flow_definition(flow.Definition)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if len(definition.Nodes) != 5 {
+		t.Fatalf("expected 5 nodes, got %d", len(definition.Nodes))
+	}
+	gateway := definition.Nodes["check_live"]
+	if gateway.Type != "GatewayNode" {
+		t.Fatalf("unexpected gateway type: %s", gateway.Type)
+	}
+	rules, ok := gateway.Config["rules"].([]interface{})
+	if !ok || len(rules) != 2 {
+		t.Fatalf("gateway rules not preserved: %#v", gateway.Config["rules"])
+	}
+	if len(definition.Nodes["start"].NextNodeIDs) != 1 || definition.Nodes["start"].NextNodeIDs[0] != "fetch_videos" {
+		t.Fatalf("start edge missing: %+v", definition.Nodes["start"].NextNodeIDs)
+	}
+}
+
+func TestImportUserFlowRejectsDanglingEdge(t *testing.T) {
+	service := new_user_flow_service(t)
+	raw := `{
+		"name": "悬空流程",
+		"start_node": "start",
+		"nodes": {
+			"start": {"id":"start","type":"StartNode","name":"开始","next_node_ids":["ghost"]}
+		}
+	}`
+	if _, err := service.ImportUserFlow(raw); err == nil {
+		t.Fatal("expected dangling edge import to fail")
+	}
+}
+
 func TestTriggerFlowDirectRunsCronFlowAsManual(t *testing.T) {
 	service := new_user_flow_service(t)
 	service.flow_engine.RegisterNode("StartNode", nodes.NewStartNode)
@@ -64,7 +157,7 @@ func TestTriggerFlowDirectRunsCronFlowAsManual(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create Cron flow: %v", err)
 	}
-	run, err := service.TriggerFlowDirect(flow.ID)
+	run, err := service.TriggerFlowDirect(flow.ID, nil)
 	if err != nil {
 		t.Fatalf("manually trigger Cron flow: %v", err)
 	}

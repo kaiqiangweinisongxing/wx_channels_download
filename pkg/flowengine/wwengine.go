@@ -21,6 +21,8 @@ func NewWorkflowEngine() *engine.FlowEngine {
 	e.RegisterNode("WorkflowNode", nodes.NewWorkflowNode)
 	e.RegisterNode("APICallNode", nodes.NewAPICallNode)
 	e.RegisterNode("ManualNode", nodes.NewManualNode)
+	e.RegisterNode("SetVariableNode", nodes.NewSetVariableNode)
+	e.RegisterNode("JSCodeNode", nodes.NewJSCodeNode)
 	return e
 }
 

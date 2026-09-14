@@ -1,5 +1,5 @@
 import { request } from "@/biz/request.js";
-import { format_time } from "@/utils";
+import { format_time } from "@/utils.js";
 
 function number_or_default(value, fallback) {
   const number = Number(value);

@@ -33,6 +33,15 @@ type user_flow_id_body struct {
 	ID string `json:"id"`
 }
 
+type user_flow_trigger_body struct {
+	ID          string                 `json:"id"`
+	InitialData map[string]interface{} `json:"initial_data"`
+}
+
+type user_flow_import_body struct {
+	Definition string `json:"definition"`
+}
+
 type user_flow_graph_body struct {
 	FlowID string `json:"flow_id"`
 }
@@ -167,7 +176,7 @@ func (c *APIClient) handle_trigger_user_flow(ctx *gin.Context) {
 	if !ok {
 		return
 	}
-	var body user_flow_id_body
+	var body user_flow_trigger_body
 	if err := ctx.ShouldBindJSON(&body); err != nil {
 		result.Err(ctx, api_code_invalid_params, "请求参数无效")
 		return
@@ -176,10 +185,29 @@ func (c *APIClient) handle_trigger_user_flow(ctx *gin.Context) {
 	// This endpoint is an explicit manual/debug action. The persisted flow may
 	// still be configured for Cron or Event execution; that configuration must
 	// not restrict or change this one-off run.
-	run, err := service.TriggerFlowDirect(flow_id)
+	run, err := service.TriggerFlowDirect(flow_id, body.InitialData)
 	if err != nil {
 		result.Err(ctx, api_code_invalid_params, err.Error())
 		return
 	}
 	result.Ok(ctx, run)
+}
+
+// handle_import_user_flow creates a pipeline from a pasted flow definition JSON.
+func (c *APIClient) handle_import_user_flow(ctx *gin.Context) {
+	service, ok := c.automation_service_or_error(ctx)
+	if !ok {
+		return
+	}
+	var body user_flow_import_body
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		result.Err(ctx, api_code_invalid_params, "请求参数无效")
+		return
+	}
+	flow, err := service.ImportUserFlow(body.Definition)
+	if err != nil {
+		result.Err(ctx, api_code_invalid_params, err.Error())
+		return
+	}
+	result.Ok(ctx, flow)
 }
