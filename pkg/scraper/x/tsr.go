@@ -85,12 +85,42 @@ func tsr_find_tweet(source string, status_id string) map[string]any {
 	best_index := 0
 	for index := range reader.slots {
 		record, ok := reader.slot_value(index).(map[string]any)
+		if ok && tsr_string(record["kind"]) == "Result.Ok" {
+			// Query results can be JSON strings rather than records in the slot table.
+			var response any
+			if json.Unmarshal([]byte(tsr_string(record["value"])), &response) != nil {
+				continue
+			}
+			record = tsr_find_json_tweet(response, status_id)
+		}
 		if !ok || tsr_string(record["rest_id"]) != status_id {
 			continue
 		}
 		score := tsr_tweet_score(record)
 		if score > best_score || (score == best_score && index < best_index) {
 			best, best_score, best_index = record, score, index
+		}
+	}
+	return best
+}
+
+func tsr_find_json_tweet(value any, status_id string) map[string]any {
+	var best map[string]any
+	switch record := value.(type) {
+	case map[string]any:
+		if tsr_string(record["__typename"]) == "Tweet" && tsr_string(record["rest_id"]) == status_id {
+			best = record
+		}
+		for _, child := range record {
+			if candidate := tsr_find_json_tweet(child, status_id); candidate != nil && (best == nil || tsr_tweet_score(candidate) > tsr_tweet_score(best)) {
+				best = candidate
+			}
+		}
+	case []any:
+		for _, child := range record {
+			if candidate := tsr_find_json_tweet(child, status_id); candidate != nil && (best == nil || tsr_tweet_score(candidate) > tsr_tweet_score(best)) {
+				best = candidate
+			}
 		}
 	}
 	return best
